@@ -28,5 +28,5 @@ jobs:
           # Store these in GitHub > Settings > Secrets > Actions
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-          SQLITE_DB_PATH: "data/leveling.db"
+          SQLITE_DB_PATH: "src/data/leveling.db"
         run: python scripts/migrate_to_supabase.py
