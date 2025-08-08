@@ -1,0 +1,35 @@
+# .pylintrc - Configuration file for Pylint
+
+[MAIN]
+
+# A comma-separated list of plugin modules to load.
+load-plugins=
+
+[MESSAGES CONTROL]
+
+# Disable specific pylint messages.
+# This is where you customize pylint to fit your team's coding style.
+# Add message codes here as you see fit.
+disable=
+    C0114, # missing-module-docstring
+    C0115, # missing-class-docstring
+    C0116, # missing-function-docstring
+    R0903, # too-few-public-methods (classes with 1-2 methods are fine)
+    W0718, # broad-exception-raised (sometimes catching Exception is intended)
+
+
+[FORMAT]
+
+# Maximum number of characters on a single line.
+# Modern standard is often 88 (for Black), 99, or 120.
+max-line-length=99
+
+# Maximum number of nested code blocks.
+max-nested-blocks=5
+
+
+[BASIC]
+
+# Good variable names that should not trigger C0103 (invalid-name).
+# Allows for common short variable names in loops or comprehensions.
+good-names=i,j,k,e,f,_,ex,fp

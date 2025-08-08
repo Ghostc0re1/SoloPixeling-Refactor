@@ -1,0 +1,65 @@
+# -----------------------
+# Python
+# -----------------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pdb
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Byte-compiled / optimized / DLL files
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environment
+.venv/
+venv/
+env/
+ENV/
+
+# pipenv / poetry
+Pipfile.lock
+poetry.lock
+
+# Unit test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.cache/
+
+# -----------------------
+# IDEs & Editors
+# -----------------------
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# -----------------------
+# OS / Miscellaneous
+# -----------------------
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Icon?
+desktop.ini
+
+# -----------------------
+# Logs
+# -----------------------
+*.log
+
+# -----------------------
+# Specific to this project
+# -----------------------
+# Keep assets/ and fonts/ (do NOT ignore)
+# Keep src/ (do NOT ignore)
+
+*.fontcache
+*.tmp

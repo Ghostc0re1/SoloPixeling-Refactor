@@ -1,0 +1,16 @@
+aiohappyeyeballs
+aiohttp
+aiosignal
+attrs
+discord.py==2.3.2
+frozenlist
+idna
+multidict
+pillow
+propcache
+python-dotenv
+typing_extensions
+yarl
+discord.py[voice]
+tzdata
+supabase
