@@ -23,11 +23,9 @@ class Scheduling(commands.Cog):
     async def cog_unload(self):
         self.ping_roles.cancel()
 
-    @tasks.loop(seconds=60)
+    @tasks.loop(minutes=1)
     async def ping_roles(self):
         now = datetime.now(EASTERN_TIMEZONE)
-        if now.second != 0:
-            return
         weekday = now.weekday()
 
         print(
