@@ -21,7 +21,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install supabase
+          pip install supabase python-dotenv
 
       - name: Run Migration Script
         env:
@@ -29,4 +29,4 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SQLITE_DB_PATH: "data/leveling.db"
-        run: python migrate_to_supabase.py
+        run: python scripts/migrate_to_supabase.py
