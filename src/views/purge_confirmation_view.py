@@ -1,3 +1,4 @@
+import logging
 from typing import Optional
 
 #
@@ -9,12 +10,20 @@ class PurgeConfirmationView(discord.ui.View):
         super().__init__(timeout=30.0)
         self.channel_to_purge = channel_to_purge
         self.limit = limit  # Store the limit
+        self.message: Optional[discord.Message] = None
 
     async def disable_all_items(self):
         """Disables all buttons in the view."""
         for item in self.children:
-            item.disabled = True
-        await self.message.edit(view=self)
+            if isinstance(item, discord.ui.Button):
+                item.disabled = True
+
+            if self.message:
+                await self.message.edit(view=self)
+            else:
+                logging.warning(
+                    "PurgeConfirmationView tried to disable items, but self.message was not set."
+                )
 
     @discord.ui.button(label="Confirm Purge", style=discord.ButtonStyle.danger)
     async def confirm_button(
