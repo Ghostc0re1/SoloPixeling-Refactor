@@ -39,7 +39,7 @@ It automates server tasks such as welcome messages, giveaways, XP-based leveling
 
 ## Project Structure
 
-```
+```text
 src/
 ├── bot.py               # Application entry point
 ├── cogs/                # Discord command modules
@@ -76,12 +76,14 @@ tests/                   # Unit tests (pytest)
 ## Installation
 
 1. **Clone the repository**
+
    ```bash
    git clone https://github.com/yourname/SoloPixeling-Refactor.git
    cd SoloPixeling-Refactor
    ```
 
 2. **Create a virtual environment & install deps**
+
    ```bash
    python -m venv .venv
    source .venv/bin/activate        # Windows: .venv\Scripts\activate
@@ -89,6 +91,7 @@ tests/                   # Unit tests (pytest)
    ```
 
 3. **Set up a `.env` file** (example values):
+
    ```env
    ENVIRONMENT=prod                 # or "dev"
    TOKEN=your_bot_token             # use TEST_TOKEN in dev mode
@@ -116,7 +119,7 @@ The bot auto-loads all cogs on startup, synchronizes slash commands, and begins 
 
 ## Testing & Linting
 
-```
+```text
 ./lint.sh          # Run pylint over src/
 ./run_checks.sh    # Lint + run pytest
 pytest             # Run tests only
