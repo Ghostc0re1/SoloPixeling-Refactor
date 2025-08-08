@@ -7,13 +7,26 @@ from helpers.schedule_utils import PingSchedule
 
 load_dotenv()
 # === Core Bot Configuration ===
-TOKEN = os.getenv("TEST_TOKEN")
+environment = os.getenv("ENVIRONMENT", "prod").lower()  # defualt to prod if unset
 
+if environment == "dev":
+    print("⚙️ Running in Development mode.")
+    TOKEN = os.getenv("TEST_TOKEN")
+    guild_id_str = os.getenv("TEST_GUILD_ID")
+else:
+    print("🚀 Running in Production mode.")
+    TOKEN = os.getenv("TOKEN")
+    guild_id_str = os.getenv("GUILD_ID")
+
+GUILD_ID = None
 try:
-    GUILD_ID = int(os.getenv("TEST_GUILD_ID"))
+    if guild_id_str is not None:
+        GUILD_ID = int(guild_id_str)
 except (ValueError, TypeError):
-    print("ERROR: GUILD_ID is not a valid integer in your .env file or is missing.")
-    GUILD_ID = None
+    print(f"❌ ERROR: The Guild ID ('{guild_id_str}') is not a valid integer.")
+
+if not TOKEN:
+    print("❌ ERROR: The bot token is missing. Check your .env file.")
 
 HERE = Path(__file__).parent
 ROOT_DIR = HERE.parent

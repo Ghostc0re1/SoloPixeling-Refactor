@@ -24,7 +24,14 @@ class Leveling(commands.Cog):
         self.guild_cooldowns = {}
         self.guild_xp_ranges = {}
         self.guild_levelup_channels = {}
-        self.daily_award_task.start()
+        self._awards_started = False
+
+    async def cog_unload(self):
+        try:
+            if self.daily_award_task.is_running():
+                self.daily_award_task.cancel()
+        except Exception:
+            pass
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -43,6 +50,10 @@ class Leveling(commands.Cog):
         )
         print(f"Loaded cooldowns for {len(self.guild_cooldowns)} guilds.")
 
+        if not self._awards_started:
+            self.daily_award_task.start()
+            self._awards_started = True
+
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if (
@@ -56,6 +67,7 @@ class Leveling(commands.Cog):
         if res and res.leveled_up:
             await self._announce_levelup(message, res.new_level)
 
+    # pylint: disable=too-many-locals
     def _process_xp_gain(self, message: discord.Message) -> XpResult | None:
         """Apply cooldown, award XP, persist, and return level-change info (or None if skipped)."""
         user_id = message.author.id
@@ -73,7 +85,9 @@ class Leveling(commands.Cog):
         xp_gain = random.randint(*xp_range)
 
         user_data = database.get_user(user_id, guild_id)
-        current_xp, current_level = user_data if user_data else (0, 0)
+        current_xp, _stored_level = user_data if user_data else (0, 0)
+        current_level = level_from_xp(current_xp)
+
         new_total_xp = current_xp + xp_gain
         new_level = level_from_xp(new_total_xp)
 

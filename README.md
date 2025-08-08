@@ -3,7 +3,6 @@
 ``` text
 SoloPixelingProd
 ├─ .pylintrc
-├─ .venv
 ├─ assets
 │  ├─ image.png
 │  └─ rankup.jpg
@@ -70,31 +69,35 @@ SoloPixelingProd
 │        └─ Roboto_SemiCondensed-ThinItalic.ttf
 ├─ LICENSE
 ├─ lint.sh
+├─ pytest.ini
 ├─ README.md
-└─ src
-   ├─ bot.py
-   ├─ cogs
-   │  ├─ events.py
-   │  ├─ giveaway.py
-   │  ├─ help.py
-   │  ├─ leveling.py
-   │  ├─ scheduling.py
-   │  ├─ settings.py
-   │  └─ utility.py
-   ├─ config.py
-   ├─ data
-   │  └─ database.py
-   ├─ helpers
-   │  ├─ giveaway_utils.py
-   │  ├─ image_utils.py
-   │  ├─ level_utils.py
-   │  └─ schedule_utils.py
-   ├─ requirements.txt
-   └─ views
-      ├─ bugreport_view.py
-      ├─ giveaway_view.py
-      ├─ help_view.py
-      ├─ leaderboard_view.py
-      └─ purge_confirmation_view.py
+├─ requirements.txt
+├─ src
+│  ├─ bot.py
+│  ├─ cogs
+│  │  ├─ events.py
+│  │  ├─ giveaway.py
+│  │  ├─ help.py
+│  │  ├─ leveling.py
+│  │  ├─ scheduling.py
+│  │  ├─ settings.py
+│  │  └─ utility.py
+│  ├─ config.py
+│  ├─ data
+│  │  ├─ database.py
+│  │  └─ leveling.db
+│  ├─ helpers
+│  │  ├─ giveaway_utils.py
+│  │  ├─ image_utils.py
+│  │  ├─ level_utils.py
+│  │  └─ schedule_utils.py
+│  └─ views
+│     ├─ bugreport_view.py
+│     ├─ giveaway_view.py
+│     ├─ help_view.py
+│     ├─ leaderboard_view.py
+│     └─ purge_confirmation_view.py
+└─ tests
+   └─ test_ping_schedule.py
 
 ```

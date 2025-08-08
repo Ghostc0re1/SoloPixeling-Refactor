@@ -72,6 +72,7 @@ def _load_font(size: int):
     return ImageFont.load_default()
 
 
+# pylint: disable=too-many-arguments
 def _build_glow_layer(
     *,
     base_size: tuple[int, int],
@@ -117,6 +118,7 @@ def _find_max_font_size(
 #
 # --- Glow Image Functions ---
 #
+# pylint: disable=too-many-arguments
 def draw_text(
     ctx: ImageDraw.ImageDraw,
     position: Tuple[float, float],
@@ -141,6 +143,7 @@ def draw_text(
     return spec
 
 
+# pylint: disable=too-many-locals
 def make_multiline_glow(
     template_path: str,
     lines: list[
@@ -217,7 +220,7 @@ def make_multiline_glow(
     return buf
 
 
-#
+# pylint: disable=too-many-locals#
 def make_glow_image(template_path: str, *, prefix: str, suffix: str) -> BytesIO:
     base = Image.open(template_path).convert("RGBA")
     w, h = base.size
@@ -264,7 +267,7 @@ def make_glow_image(template_path: str, *, prefix: str, suffix: str) -> BytesIO:
     return buf
 
 
-#
+# pylint: disable=too-many-locals
 def make_glow_image_segments(
     template_path: str, segments: list[tuple[str, str]], font_size: int = 72
 ) -> BytesIO:
@@ -342,7 +345,11 @@ async def generate_levelup_banner(user: discord.User, new_role: str) -> discord.
     return discord.File(fp=buf, filename="levelup.png")
 
 
-#
+# pylint: disable=too-many-arguments
+# pylint: disable=too-many-positional-arguments
+# pylint: disable=too-many-locals
+# pylint: disable=too-many-branches
+# pylint: disable=too-many-statements
 async def generate_rank_card(
     member: discord.Member,
     level: int,
