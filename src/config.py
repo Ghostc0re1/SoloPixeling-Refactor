@@ -29,10 +29,19 @@ if environment == "dev":
     print("⚙️ Running in Development mode.")
     TOKEN = os.getenv("TEST_TOKEN")
     guild_id_str = os.getenv("TEST_GUILD_ID")
+
+    DEFAULT_WELCOME_CHANNEL_ID = get_env_int("TEST_DEFAULT_WELCOME_CHANNEL_ID")
+    DEFAULT_LEVELUP_CHANNEL_ID = get_env_int("TEST_DEFAULT_LEVELUP_CHANNEL_ID")
+    BUG_REPORT_CHANNEL_ID = get_env_int("TEST_BUG_REPORT_CHANNEL_ID")
+
 else:
     print("🚀 Running in Production mode.")
     TOKEN = os.getenv("TOKEN")
     guild_id_str = os.getenv("GUILD_ID")
+
+    DEFAULT_WELCOME_CHANNEL_ID = get_env_int("DEFAULT_WELCOME_CHANNEL_ID")
+    DEFAULT_LEVELUP_CHANNEL_ID = get_env_int("DEFAULT_LEVELUP_CHANNEL_ID")
+    BUG_REPORT_CHANNEL_ID = get_env_int("BUG_REPORT_CHANNEL_ID")
 
 GUILD_ID = None
 try:
@@ -71,9 +80,6 @@ EXCLUDED_CHANNELS = [
     if channel_id.strip()
 ]
 
-DEFAULT_WELCOME_CHANNEL_ID = get_env_int("DEFAULT_WELCOME_CHANNEL_ID")
-DEFAULT_LEVELUP_CHANNEL_ID = get_env_int("DEFAULT_LEVELUP_CHANNEL_ID")
-BUG_REPORT_CHANNEL_ID = get_env_int("BUG_REPORT_CHANNEL_ID")
 REPORT_GUILD_ID = get_env_int("REPORT_GUILD_ID")
 
 print(f"Excluded channels loaded: {EXCLUDED_CHANNELS}")
