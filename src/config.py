@@ -6,7 +6,23 @@ from dotenv import load_dotenv
 from helpers.schedule_utils import PingSchedule
 
 load_dotenv()
+
 # === Core Bot Configuration ===
+
+
+# --- Environment ---
+def get_env_int(key: str) -> int | None:
+    """Safely loads an integer from environment variables."""
+    value = os.getenv(key)
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        print(f"⚠️ Warning: Environment variable '{key}' is not a valid integer.")
+        return None
+
+
 environment = os.getenv("ENVIRONMENT", "prod").lower()  # defualt to prod if unset
 
 if environment == "dev":
@@ -31,6 +47,7 @@ if not TOKEN:
 HERE = Path(__file__).parent
 ROOT_DIR = HERE.parent
 
+# === Fonts ===
 REGULAR_FONT_PATH = ROOT_DIR / "fonts" / "Roboto" / "static" / "Roboto-Regular.ttf"
 BOLD_FONT_PATH = ROOT_DIR / "fonts" / "Roboto" / "static" / "Roboto-Bold.ttf"
 ITALIC_FONT_PATH = ROOT_DIR / "fonts" / "Roboto" / "static" / "Roboto-Italic.ttf"
@@ -41,18 +58,26 @@ BOLD_ITALIC_FONT_PATH = (
 if not REGULAR_FONT_PATH.exists():
     raise FileNotFoundError(f"Could not find the font file at {REGULAR_FONT_PATH}")
 
+# --- Asset Paths ---
 RANK_CARD_BACKGROUND_PATH = ROOT_DIR / "assets" / "image.png"
 LEVELUP_BANNER_PATH = ROOT_DIR / "assets" / "rankup.jpg"
 TEMPLATE_PATH = LEVELUP_BANNER_PATH
 
 # === Channel IDs ===
-EXCLUDED_CHANNELS = [1396172087764455604]
-DEFAULT_WELCOME_CHANNEL_ID = 1231665533477453835
-DEFAULT_LEVELUP_CHANNEL_ID = 956957161840341132
-BUG_REPORT_CHANNEL_ID = 1402381217969475625
-REPORT_GUILD_ID = 956957091803852830
-WELCOME_IMAGE_BOUNDARY = (300, 380, 1620, 860)
+excluded_channels_str = os.getenv("EXCLUDED_CHANNELS", "")
+EXCLUDED_CHANNELS = [
+    int(channel_id)
+    for channel_id in excluded_channels_str.split(",")
+    if channel_id.strip()
+]
 
+DEFAULT_WELCOME_CHANNEL_ID = get_env_int("DEFAULT_WELCOME_CHANNEL_ID")
+DEFAULT_LEVELUP_CHANNEL_ID = get_env_int("DEFAULT_LEVELUP_CHANNEL_ID")
+BUG_REPORT_CHANNEL_ID = get_env_int("BUG_REPORT_CHANNEL_ID")
+REPORT_GUILD_ID = get_env_int("REPORT_GUILD_ID")
+
+print(f"Excluded channels loaded: {EXCLUDED_CHANNELS}")
+WELCOME_IMAGE_BOUNDARY = (300, 380, 1620, 860)
 
 # === Ping & Scheduling ===
 PING_SCHEDULES: tuple[PingSchedule, ...] = (
