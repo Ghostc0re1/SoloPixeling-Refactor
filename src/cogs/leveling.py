@@ -31,7 +31,7 @@ class Leveling(commands.Cog):
             if self.daily_award_task.is_running():
                 self.daily_award_task.cancel()
         except Exception as e:
-            logging.error(f"Failed to unload daily_award_task: {e}")
+            logging.error("Failed to unload daily_award_task: %s", e)
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -55,7 +55,7 @@ class Leveling(commands.Cog):
                 self.daily_award_task.start()
                 self._awards_started = True
         except Exception as e:
-            logging.error(f"Failed to load leveling settings on_ready: {e}")
+            logging.error("Failed to load leveling settings on_ready: %s", e)
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -71,7 +71,7 @@ class Leveling(commands.Cog):
             if res and res.leveled_up:
                 await self._announce_levelup(message, res.new_level)
         except Exception as e:
-            logging.error(f"Error processing XP gain for message {message.id}: {e}")
+            logging.error("Error processing XP gain for message %s: %s", message.id, e)
 
     # pylint: disable=too-many-locals
     def _process_xp_gain(self, message: discord.Message) -> XpResult | None:
@@ -163,10 +163,12 @@ class Leveling(commands.Cog):
             await message.author.add_roles(role, reason="Level up reward")
         except discord.Forbidden:
             logging.warning(
-                f"Missing permissions to announce level up in guild {message.guild.id}"
+                "Missing permissions to announce level up in guild %s", message.guild.id
             )
         except Exception as e:
-            logging.error(f"Failed to announce level up for {message.author.id}: {e}")
+            logging.error(
+                "Failed to announce level up for %s: %s", message.author.id, e
+            )
 
     @app_commands.command(
         name="rank", description="Check your (or someone else's) rank & XP"
@@ -202,7 +204,7 @@ class Leveling(commands.Cog):
             )
             await interaction.followup.send(file=rank_card)
         except Exception as e:
-            logging.error(f"Error in /rank command: {e}")
+            logging.error("Error in /rank command: %s", e)
             await interaction.followup.send(
                 "Could not generate rank card. Please try again later.", ephemeral=True
             )
@@ -227,7 +229,7 @@ class Leveling(commands.Cog):
             message = await interaction.followup.send(embed=embed, view=view)
             view.message = message
         except Exception as e:
-            logging.error(f"Error in /leaderboard command: {e}")
+            logging.error("Error in /leaderboard command: %s", e)
             await interaction.followup.send(
                 "Could not retrieve the leaderboard. Please try again later.",
                 ephemeral=True,
@@ -270,15 +272,15 @@ class Leveling(commands.Cog):
                 continue
             except discord.Forbidden:
                 logging.warning(
-                    f"Missing permissions for daily awards in guild {guild.id}"
+                    "Missing permissions for daily awards in guild %s", guild.id
                 )
             except Exception as e:
-                logging.error(f"Error in daily_award_task for guild {guild.id}: {e}")
+                logging.error("Error in daily_award_task for guild %s: %s", guild.id, e)
 
         try:
             database.reset_daily_xp(yesterday)
         except Exception as e:
-            logging.error(f"Failed to reset daily XP for {yesterday}: {e}")
+            logging.error("Failed to reset daily XP for %s: %s", yesterday, e)
 
     @daily_award_task.before_loop
     async def before_daily_award(self):

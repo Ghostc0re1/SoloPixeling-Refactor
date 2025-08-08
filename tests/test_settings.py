@@ -37,9 +37,15 @@ def interaction(guild):
     it.user = MagicMock(spec=discord.Member)
     it.user.mention = "@user"
 
-    # response mock: send_message is awaited by the code under test
+    # --- MOCK CORRECTIONS ---
+    # Mock the response object and all its async methods
     it.response = MagicMock()
     it.response.send_message = AsyncMock()
+    it.response.defer = AsyncMock()  # This was missing
+
+    # Mock the followup object and its async send method
+    it.followup = MagicMock()
+    it.followup.send = AsyncMock()  # This was missing
 
     # original_response() is awaited too
     it.original_response = AsyncMock(return_value=MagicMock(spec=discord.Message))
@@ -134,8 +140,8 @@ async def test_purge_messages_sends_confirmation_and_stores_view_message(
 @pytest.mark.asyncio
 async def test_set_cooldown_rejects_negative(cog, interaction):
     await call_cmd(SettingsCog.set_cooldown, cog, interaction, seconds=-10)
-    interaction.response.send_message.assert_called_once()
-    assert "cannot be negative" in interaction.response.send_message.call_args[0][0]
+    interaction.followup.send.assert_called_once()
+    assert "cannot be negative" in interaction.followup.send.call_args[0][0]
 
 
 @pytest.mark.asyncio
@@ -148,7 +154,7 @@ async def test_set_cooldown_updates_db_and_cache(cog, interaction):
 
     set_cd.assert_called_once_with(interaction.guild.id, 42)
     assert leveling_cog.guild_cooldowns[interaction.guild.id] == 42
-    interaction.response.send_message.assert_called_once()
+    interaction.followup.send.assert_called_once()
 
 
 # ------------- xprange -----------------
@@ -157,8 +163,8 @@ async def test_set_cooldown_updates_db_and_cache(cog, interaction):
 @pytest.mark.asyncio
 async def test_set_xprange_rejects_invalid(cog, interaction):
     await call_cmd(SettingsCog.set_xprange, cog, interaction, min_xp=10, max_xp=5)
-    interaction.response.send_message.assert_called_once()
-    assert "Invalid XP range" in interaction.response.send_message.call_args[0][0]
+    interaction.followup.send.assert_called_once()
+    assert "Invalid XP range" in interaction.followup.send.call_args[0][0]
 
 
 @pytest.mark.asyncio
@@ -171,7 +177,7 @@ async def test_set_xprange_updates_db_and_cache(cog, interaction):
 
     upd.assert_called_once_with(interaction.guild.id, 1, 3)
     assert leveling_cog.guild_xp_ranges[interaction.guild.id] == (1, 3)
-    interaction.response.send_message.assert_called_once()
+    interaction.followup.send.assert_called_once()
 
 
 # ------------- removeallxp -----------------
@@ -184,8 +190,8 @@ async def test_removeallxp_no_xp(cog, interaction):
     member.roles = []
     with patch("cogs.settings.database.get_user", return_value=None):
         await call_cmd(SettingsCog.removeallxp, cog, interaction, member)
-    interaction.response.send_message.assert_called_once()
-    assert "no XP" in interaction.response.send_message.call_args[0][0]
+    interaction.followup.send.assert_called_once()
+    assert "no XP" in interaction.followup.send.call_args[0][0]
 
 
 @pytest.mark.asyncio
@@ -225,7 +231,7 @@ async def test_removeallxp_clears_db_and_removes_roles(cog, interaction, monkeyp
     set_user.assert_called_once_with(member.id, interaction.guild.id, 0, 0)
     # removed role since threshold crossed downward
     member.remove_roles.assert_called_once()
-    interaction.response.send_message.assert_called_once()
+    interaction.followup.send.assert_called_once()
 
 
 # ------------- addxp -----------------
@@ -246,7 +252,7 @@ async def test_addxp_awards_roles_and_updates_db(cog, interaction, monkeypatch):
 
     monkeypatch.setattr("cogs.settings.config.ROLE_REWARDS", {5: role.id}, raising=True)
 
-    with patch("cogs.settings.database.get_user", return_value=(10,)), patch(
+    with patch("cogs.settings.database.get_user", return_value=(10, 0)), patch(
         "cogs.settings.database.set_user_xp_and_level"
     ) as set_user, patch("cogs.settings.build_xp_status") as build_status, patch(
         "cogs.settings.level_from_xp", return_value=1
@@ -264,7 +270,7 @@ async def test_addxp_awards_roles_and_updates_db(cog, interaction, monkeypatch):
 
     set_user.assert_called_once_with(member.id, interaction.guild.id, 999, 5)
     member.add_roles.assert_called_once()
-    interaction.response.send_message.assert_called_once()
+    interaction.followup.send.assert_called_once()
 
 
 # ------------- removexp -----------------
@@ -287,7 +293,7 @@ async def test_removexp_drops_roles_and_updates_db(cog, interaction, monkeypatch
 
     monkeypatch.setattr("cogs.settings.config.ROLE_REWARDS", {3: role.id}, raising=True)
 
-    with patch("cogs.settings.database.get_user", return_value=(250,)), patch(
+    with patch("cogs.settings.database.get_user", return_value=(250, 3)), patch(
         "cogs.settings.database.set_user_xp_and_level"
     ) as set_user, patch("cogs.settings.build_xp_status") as build_status, patch(
         "cogs.settings.level_from_xp", return_value=3
@@ -305,4 +311,4 @@ async def test_removexp_drops_roles_and_updates_db(cog, interaction, monkeypatch
 
     set_user.assert_called_once_with(member.id, interaction.guild.id, 100, 2)
     member.remove_roles.assert_called_once()
-    interaction.response.send_message.assert_called_once()
+    interaction.followup.send.assert_called_once()

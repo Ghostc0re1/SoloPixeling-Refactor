@@ -1,4 +1,3 @@
-from os import PathLike
 from io import BytesIO
 from typing import Optional, Tuple, Union
 from dataclasses import dataclass
