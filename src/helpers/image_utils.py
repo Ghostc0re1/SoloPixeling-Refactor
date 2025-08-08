@@ -59,7 +59,7 @@ class TextDrawSpec:
 #
 def _load_font(size: int):
     candidates = config.REGULAR_FONT_PATH
-    if isinstance(candidates, (str, PathLike)):
+    if not isinstance(candidates, (list, tuple)):
         candidates = [candidates]
 
     for fp in candidates:
