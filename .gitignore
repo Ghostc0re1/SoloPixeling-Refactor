@@ -63,3 +63,8 @@ desktop.ini
 
 *.fontcache
 *.tmp
+
+# dotenv / local secrets
+.env
+.env.*.local
+*.env
