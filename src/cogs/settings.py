@@ -36,7 +36,7 @@ class SettingsCog(commands.Cog, name="Settings"):
         if events_cog:
             events_cog.welcome_channels[guild_id] = channel.id
 
-        await interaction.response.send(
+        await interaction.response.send_message(
             f"✅ Welcome messages will now be sent to {channel.mention}.",
             ephemeral=True,
         )
@@ -58,7 +58,7 @@ class SettingsCog(commands.Cog, name="Settings"):
         if leveling_cog:
             leveling_cog.guild_levelup_channels[guild_id] = channel.id
 
-        await interaction.response.send(
+        await interaction.response.send_message(
             f"✅ Level-up announcements will now be sent to {channel.mention}.",
             ephemeral=True,
         )
@@ -86,7 +86,7 @@ class SettingsCog(commands.Cog, name="Settings"):
 
             view = PurgeConfirmationView(channel, limit)
 
-            await interaction.response.send(
+            await interaction.response.send_message(
                 (
                     f"Are you sure you want to permanently delete {purge_amount_text} "
                     f"in {channel.mention}?"
