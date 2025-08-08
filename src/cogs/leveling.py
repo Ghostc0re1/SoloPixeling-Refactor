@@ -30,29 +30,32 @@ class Leveling(commands.Cog):
         try:
             if self.daily_award_task.is_running():
                 self.daily_award_task.cancel()
-        except Exception:
-            pass
+        except Exception as e:
+            logging.error(f"Failed to unload daily_award_task: {e}")
 
     @commands.Cog.listener()
     async def on_ready(self):
         """Load all settings from the database on startup."""
 
         # Cooldowns
-        self.guild_cooldowns = database.get_all_cooldowns()
-        self.guild_xp_ranges = database.get_all_xp_ranges()
-        print(f"Loaded XP ranges for {len(self.guild_xp_ranges)} guilds.")
-        all_channel_settings = database.get_all_channel_settings()
-        for guild_id, settings in all_channel_settings.items():
-            if settings.get("levelup"):
-                self.guild_levelup_channels[guild_id] = settings["levelup"]
-        print(
-            f"Loaded level-up channel settings for {len(self.guild_levelup_channels)} guilds."
-        )
-        print(f"Loaded cooldowns for {len(self.guild_cooldowns)} guilds.")
+        try:
+            self.guild_cooldowns = database.get_all_cooldowns()
+            self.guild_xp_ranges = database.get_all_xp_ranges()
+            print(f"Loaded XP ranges for {len(self.guild_xp_ranges)} guilds.")
+            all_channel_settings = database.get_all_channel_settings()
+            for guild_id, settings in all_channel_settings.items():
+                if settings.get("levelup"):
+                    self.guild_levelup_channels[guild_id] = settings["levelup"]
+            print(
+                f"Loaded level-up channel settings for {len(self.guild_levelup_channels)} guilds."
+            )
+            print(f"Loaded cooldowns for {len(self.guild_cooldowns)} guilds.")
 
-        if not self._awards_started:
-            self.daily_award_task.start()
-            self._awards_started = True
+            if not self._awards_started:
+                self.daily_award_task.start()
+                self._awards_started = True
+        except Exception as e:
+            logging.error(f"Failed to load leveling settings on_ready: {e}")
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -63,9 +66,12 @@ class Leveling(commands.Cog):
         ):
             return
 
-        res = self._process_xp_gain(message)
-        if res and res.leveled_up:
-            await self._announce_levelup(message, res.new_level)
+        try:
+            res = self._process_xp_gain(message)
+            if res and res.leveled_up:
+                await self._announce_levelup(message, res.new_level)
+        except Exception as e:
+            logging.error(f"Error processing XP gain for message {message.id}: {e}")
 
     # pylint: disable=too-many-locals
     def _process_xp_gain(self, message: discord.Message) -> XpResult | None:
@@ -110,50 +116,57 @@ class Leveling(commands.Cog):
 
     async def _announce_levelup(self, message: discord.Message, new_level: int) -> None:
         """Send level-up message and apply role rewards if configured."""
-        guild_id = message.guild.id
-        channel_id = self.guild_levelup_channels.get(
-            guild_id, config.DEFAULT_LEVELUP_CHANNEL_ID
-        )
-        if not channel_id:
-            return
+        try:
+            guild_id = message.guild.id
+            channel_id = self.guild_levelup_channels.get(
+                guild_id, config.DEFAULT_LEVELUP_CHANNEL_ID
+            )
+            if not channel_id:
+                return
 
-        lvl_ch = message.guild.get_channel(channel_id)
-        if not lvl_ch:
-            return
+            lvl_ch = message.guild.get_channel(channel_id)
+            if not lvl_ch:
+                return
 
-        await lvl_ch.send(f"Player {message.author.mention} has leveled up.")
+            await lvl_ch.send(f"Player {message.author.mention} has leveled up.")
 
-        # Role reward (optional)
-        role_id = config.ROLE_REWARDS.get(new_level)
-        if not role_id:
-            return
+            # Role reward (optional)
+            role_id = config.ROLE_REWARDS.get(new_level)
+            if not role_id:
+                return
 
-        role = message.guild.get_role(role_id)
-        if not role:
-            return
+            role = message.guild.get_role(role_id)
+            if not role:
+                return
 
-        lines = [
-            [
-                ("Player ", config.REGULAR_FONT_PATH),
-                (message.author.display_name, config.BOLD_ITALIC_FONT_PATH),
-            ],
-            [("has been promoted to an ", config.REGULAR_FONT_PATH)],
-            [(f"{role.name}.", config.BOLD_ITALIC_FONT_PATH)],
-        ]
+            lines = [
+                [
+                    ("Player ", config.REGULAR_FONT_PATH),
+                    (message.author.display_name, config.BOLD_ITALIC_FONT_PATH),
+                ],
+                [("has been promoted to an ", config.REGULAR_FONT_PATH)],
+                [(f"{role.name}.", config.BOLD_ITALIC_FONT_PATH)],
+            ]
 
-        buf = image_utils.make_multiline_glow(
-            config.LEVELUP_BANNER_PATH,
-            lines,
-            max_font_size=50,
-            glow_radii=(20, 40, 80),
-            v_pad=8,
-        )
+            buf = image_utils.make_multiline_glow(
+                config.LEVELUP_BANNER_PATH,
+                lines,
+                max_font_size=50,
+                glow_radii=(20, 40, 80),
+                v_pad=8,
+            )
 
-        await lvl_ch.send(
-            file=discord.File(fp=buf, filename="rankup.jpg"),
-            allowed_mentions=discord.AllowedMentions(users=True),
-        )
-        await message.author.add_roles(role, reason="Level up reward")
+            await lvl_ch.send(
+                file=discord.File(fp=buf, filename="rankup.jpg"),
+                allowed_mentions=discord.AllowedMentions(users=True),
+            )
+            await message.author.add_roles(role, reason="Level up reward")
+        except discord.Forbidden:
+            logging.warning(
+                f"Missing permissions to announce level up in guild {message.guild.id}"
+            )
+        except Exception as e:
+            logging.error(f"Failed to announce level up for {message.author.id}: {e}")
 
     @app_commands.command(
         name="rank", description="Check your (or someone else's) rank & XP"
@@ -163,50 +176,62 @@ class Leveling(commands.Cog):
         self, interaction: discord.Interaction, member: discord.Member = None
     ):
         await interaction.response.defer()
+        try:
+            target_member = member or interaction.user
+            user_data = database.get_user(target_member.id, interaction.guild.id)
+            user_rank = database.get_user_rank(target_member.id, interaction.guild.id)
 
-        target_member = member or interaction.user
-        user_data = database.get_user(target_member.id, interaction.guild.id)
-        user_rank = database.get_user_rank(target_member.id, interaction.guild.id)
+            if not user_data or user_rank is None:
+                return await interaction.followup.send(
+                    "That user has no XP yet.", ephemeral=True
+                )
 
-        if not user_data or user_rank is None:
-            return await interaction.followup.send(
-                "That user has no XP yet.", ephemeral=True
+            total_xp, level = user_data
+            xp_of_current_level_start = xp_for_level(level)
+            xp_of_next_level_start = xp_for_level(level + 1)
+            xp_progress = total_xp - xp_of_current_level_start
+            xp_needed = xp_of_next_level_start - xp_of_current_level_start
+
+            rank_card = await image_utils.generate_rank_card(
+                member=target_member,
+                level=level,
+                rank=user_rank,
+                current_xp=xp_progress,
+                required_xp=xp_needed,
+                total_xp=total_xp,
             )
-
-        total_xp, level = user_data
-        xp_of_current_level_start = xp_for_level(level)
-        xp_of_next_level_start = xp_for_level(level + 1)
-        xp_progress = total_xp - xp_of_current_level_start
-        xp_needed = xp_of_next_level_start - xp_of_current_level_start
-
-        rank_card = await image_utils.generate_rank_card(
-            member=target_member,
-            level=level,
-            rank=user_rank,
-            current_xp=xp_progress,
-            required_xp=xp_needed,
-            total_xp=total_xp,
-        )
-        await interaction.followup.send(file=rank_card)
+            await interaction.followup.send(file=rank_card)
+        except Exception as e:
+            logging.error(f"Error in /rank command: {e}")
+            await interaction.followup.send(
+                "Could not generate rank card. Please try again later.", ephemeral=True
+            )
 
     @app_commands.command(
         name="leaderboard", description="Show the server's top users by level and XP."
     )
     async def leaderboard(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        rows = database.get_leaderboard(interaction.guild.id, 200)
+        try:
+            rows = database.get_leaderboard(interaction.guild.id, 200)
 
-        if not rows:
-            return await interaction.followup.send(
-                "No leaderboard data yet.", ephemeral=True
+            if not rows:
+                return await interaction.followup.send(
+                    "No leaderboard data yet.", ephemeral=True
+                )
+
+            view = LeaderboardView(interaction, rows)
+            view.update_buttons()
+            embed = await view.generate_embed()
+
+            message = await interaction.followup.send(embed=embed, view=view)
+            view.message = message
+        except Exception as e:
+            logging.error(f"Error in /leaderboard command: {e}")
+            await interaction.followup.send(
+                "Could not retrieve the leaderboard. Please try again later.",
+                ephemeral=True,
             )
-
-        view = LeaderboardView(interaction, rows)
-        view.update_buttons()
-        embed = await view.generate_embed()
-
-        message = await interaction.followup.send(embed=embed, view=view)
-        view.message = message
 
     @tasks.loop(time=dt_time(0, 0, tzinfo=ZoneInfo("America/New_York")))
     async def daily_award_task(self):
@@ -214,34 +239,46 @@ class Leveling(commands.Cog):
         yesterday = (eastern_now - timedelta(days=1)).strftime("%Y-%m-%d")
 
         for guild in self.bot.guilds:
-            top = database.get_daily_top_user(guild.id, yesterday)
-            if not top:
-                continue
-            user_id, xp_gain = top
-
-            role = guild.get_role(config.DAILY_XP_ROLE)
-
             try:
-                member = await guild.fetch_member(user_id)
+                top = database.get_daily_top_user(guild.id, yesterday)
+                if not top:
+                    continue
+                user_id, xp_gain = top
+
+                role = guild.get_role(config.DAILY_XP_ROLE)
+
+                try:
+                    member = await guild.fetch_member(user_id)
+                except discord.NotFound:
+                    continue
+                if not role:
+                    continue
+
+                for m in role.members:
+                    await m.remove_roles(role, reason="Daily XP reset")
+
+                await member.add_roles(role, reason=f"Most XP yesterday: {xp_gain}")
+
+                chan_id = config.DAILY_ANNOUNCE_CHANNEL.get(guild.id)
+                if chan_id:
+                    ch = guild.get_channel(chan_id)
+                    if ch:
+                        await ch.send(
+                            f"🏆 Congrats {member.mention}: you gained **{xp_gain} XP** yesterday!"
+                        )
             except discord.NotFound:
                 continue
-            if not role:
-                continue
+            except discord.Forbidden:
+                logging.warning(
+                    f"Missing permissions for daily awards in guild {guild.id}"
+                )
+            except Exception as e:
+                logging.error(f"Error in daily_award_task for guild {guild.id}: {e}")
 
-            for m in role.members:
-                await m.remove_roles(role, reason="Daily XP reset")
-
-            await member.add_roles(role, reason=f"Most XP yesterday: {xp_gain}")
-
-            chan_id = config.DAILY_ANNOUNCE_CHANNEL.get(guild.id)
-            if chan_id:
-                ch = guild.get_channel(chan_id)
-                if ch:
-                    await ch.send(
-                        f"🏆 Congrats {member.mention}: you gained **{xp_gain} XP** yesterday!"
-                    )
-
-        database.reset_daily_xp(yesterday)
+        try:
+            database.reset_daily_xp(yesterday)
+        except Exception as e:
+            logging.error(f"Failed to reset daily XP for {yesterday}: {e}")
 
     @daily_award_task.before_loop
     async def before_daily_award(self):
