@@ -2,6 +2,7 @@
 
 from datetime import datetime
 import os
+import discord
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
@@ -202,3 +203,82 @@ def get_all_guild_settings() -> dict:
     response = supabase.table("guild_settings").select("*").execute()
     # Create a dictionary keyed by guild_id
     return {row["guild_id"]: row for row in response.data}
+
+
+# --- Giveaway Functions ---
+
+
+async def create_giveaway(
+    message: discord.Message,
+    prize: str,
+    end_time: datetime,
+    winner_count: int,
+    host: discord.Member,
+) -> None:
+    """Stores a new giveaway in the database."""
+    giveaway_data = {
+        "message_id": message.id,
+        "channel_id": message.channel.id,
+        "guild_id": message.guild.id,
+        "prize": prize,
+        "end_time": end_time.isoformat(),
+        "winner_count": winner_count,
+        "host_id": host.id,
+        "is_active": True,
+    }
+    supabase.table("giveaways").insert(giveaway_data).execute()
+
+
+async def add_entry(giveaway_id: int, user_id: int) -> tuple[bool, str]:
+    """Adds a user entry to a giveaway. Returns (success, message)."""
+    try:
+        supabase.table("entries").insert(
+            {"giveaway_id": giveaway_id, "user_id": user_id}
+        ).execute()
+        return (True, "You have entered the giveaway!")
+    except Exception as e:
+        # We can check for that specific error code.
+        if "23505" in str(e):  # 23505 is PostgreSQL's unique_violation error code
+            return (False, "You have already entered this giveaway!")
+        print(f"Error adding entry: {e}")
+        return (False, "An error occurred while entering the giveaway.")
+
+
+async def get_entry_count(giveaway_id: int) -> int:
+    """Gets the number of entries for a giveaway."""
+    response = (
+        supabase.table("entries")
+        .select("id", count="exact")
+        .eq("giveaway_id", giveaway_id)
+        .execute()
+    )
+    return response.count
+
+
+async def get_active_giveaways() -> list:
+    """Fetches all giveaways that are currently active."""
+    response = supabase.table("giveaways").select("*").eq("is_active", True).execute()
+    return response.data
+
+
+async def get_giveaway_entrants(giveaway_id: int) -> list[int]:
+    """Gets a list of user IDs for all entrants of a giveaway."""
+    response = (
+        supabase.table("entries")
+        .select("user_id")
+        .eq("giveaway_id", giveaway_id)
+        .execute()
+    )
+    return [entry["user_id"] for entry in response.data]
+
+
+async def end_giveaway(message_id: int) -> bool:
+    # only flip if still active to avoid races
+    res = (
+        supabase.table("giveaways")
+        .update({"is_active": False})
+        .eq("message_id", message_id)
+        .eq("is_active", True)
+        .execute()
+    )
+    return bool(res.data)
