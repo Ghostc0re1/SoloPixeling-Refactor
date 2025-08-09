@@ -54,7 +54,9 @@ class Giveaway(commands.Cog):
             embed.add_field(name="Entries", value="0", inline=True)
             embed.add_field(name="Winners", value=str(winners), inline=True)
             embed.add_field(
-                name="Ends", value=f"<t:{int(end_time.timestamp())}:R>", inline=False
+                name="Ends",
+                value=f"<t:{int(end_time.timestamp())}:R> (<t:{int(end_time.timestamp())}:F>)",
+                inline=False,
             )
             embed.set_footer(text=f"Started by {interaction.user.display_name}")
 
