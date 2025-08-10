@@ -176,6 +176,19 @@ def set_profile_banner_path(
     ).execute()
 
 
+def clear_profile_colors(user_id: int, guild_id: int) -> None:
+    # explicitly set both columns to NULL
+    supabase.table("user_profiles").upsert(
+        {
+            "user_id": user_id,
+            "guild_id": guild_id,
+            "primary_color": None,
+            "accent_color": None,
+        },
+        on_conflict="user_id,guild_id",
+    ).execute()
+
+
 #
 # --- Leaderboard Functions ---
 #

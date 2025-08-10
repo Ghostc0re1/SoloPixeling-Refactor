@@ -359,7 +359,6 @@ class Leveling(commands.Cog):
                 "content-type": mime,
                 "cache-control": "public, max-age=31536000, immutable",
             },
-            upsert=True,
         )
         return path
 
@@ -461,6 +460,23 @@ class Leveling(commands.Cog):
             logging.exception("rank-set-colors failed")
             await interaction.followup.send(
                 ("Failed to save colors. Please try again. %s", e), ephemeral=True
+            )
+
+    @app_commands.command(
+        name="rank-reset-colors",
+        description="Reset your rank card colors to the defaults.",
+    )
+    async def rank_reset_colors(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            database.clear_profile_colors(interaction.user.id, interaction.guild.id)
+            await interaction.followup.send(
+                "✅ Colors reset to defaults.", ephemeral=True
+            )
+        except Exception:
+            logging.exception("rank-reset-colors failed")
+            await interaction.followup.send(
+                "Failed to reset colors. Please try again.", ephemeral=True
             )
 
 
