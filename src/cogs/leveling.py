@@ -3,6 +3,8 @@ import logging
 import time
 import random
 from zoneinfo import ZoneInfo
+from io import BytesIO
+from PIL import Image, ImageOps
 
 #
 import discord
@@ -11,7 +13,12 @@ from discord import app_commands
 
 #
 import config
-from helpers.level_utils import xp_for_level, level_from_xp, XpResult
+from helpers.level_utils import (
+    xp_for_level,
+    level_from_xp,
+    fetch_banner_bytes,
+    XpResult,
+)
 from helpers import image_utils
 from data import database
 from views.leaderboard_view import LeaderboardView
@@ -83,10 +90,11 @@ class Leveling(commands.Cog):
         cooldown = self.guild_cooldowns.get(guild_id, config.DEFAULT_XP_COOLDOWN)
 
         now = time.time()
-        last = self._last_xp.get(user_id, 0.0)
+        key = (guild_id, user_id)
+        last = self._last_xp.get(key, 0.0)
         if now - last < cooldown:
             return None
-        self._last_xp[user_id] = now
+        self._last_xp[key] = now
 
         xp_gain = random.randint(*xp_range)
 
@@ -194,6 +202,17 @@ class Leveling(commands.Cog):
             xp_progress = total_xp - xp_of_current_level_start
             xp_needed = xp_of_next_level_start - xp_of_current_level_start
 
+            profile = (
+                database.get_user_profile(target_member.id, interaction.guild.id) or {}
+            )
+            primary = profile.get("primary_color")
+            accent = profile.get("accent_color")
+            banner_path = profile.get("banner_path")
+
+            banner_bytes = (
+                await fetch_banner_bytes(banner_path) if banner_path else None
+            )
+
             rank_card = await image_utils.generate_rank_card(
                 member=target_member,
                 level=level,
@@ -201,6 +220,9 @@ class Leveling(commands.Cog):
                 current_xp=xp_progress,
                 required_xp=xp_needed,
                 total_xp=total_xp,
+                primary_color=primary,
+                accent_color=accent,
+                banner_bytes=banner_bytes,
             )
             await interaction.followup.send(file=rank_card)
         except Exception as e:
@@ -285,6 +307,161 @@ class Leveling(commands.Cog):
     @daily_award_task.before_loop
     async def before_daily_award(self):
         await self.bot.wait_until_ready()
+
+    def _is_hex(self, s: str) -> bool:
+        return (
+            isinstance(s, str)
+            and len(s) == 7
+            and s.startswith("#")
+            and all(c in "0123456789abcdefABCDEF" for c in s[1:])
+        )
+
+    def _process_banner_bytes(
+        self, raw: bytes, prefer_webp: bool = True
+    ) -> tuple[bytes, str, str]:
+        """Return (processed_bytes, mime, ext) scaled to 1600x400, letterboxed center."""
+        im = Image.open(BytesIO(raw)).convert("RGBA")
+        im = ImageOps.contain(
+            im, (config.CARD_WIDTH, config.CARD_HEIGHT), Image.Resampling.LANCZOS
+        )
+        canvas = Image.new(
+            "RGBA", (config.CARD_WIDTH, config.CARD_HEIGHT), (0, 0, 0, 0)
+        )
+        x = (config.CARD_WIDTH - im.width) // 2
+        y = (config.CARD_HEIGHT - im.height) // 2
+        canvas.paste(im, (x, y), im)
+
+        out = BytesIO()
+        if prefer_webp:
+            canvas.convert("RGB").save(out, format="WEBP", quality=85, method=6)
+            return out.getvalue(), "image/webp", "webp"
+        else:
+            canvas.convert("RGB").save(
+                out, format="JPEG", quality=85, optimize=True, progressive=True
+            )
+            return out.getvalue(), "image/jpeg", "jpg"
+
+    async def _upload_banner(
+        self, user_id: int, guild_id: int, data: bytes, mime: str, ext: str
+    ) -> str:
+        """
+        Uploads to Supabase Storage and returns storage path (not full URL).
+        Example path: banners/<guild>/<user>/rank_banner.webp
+        """
+        # import here to avoid circulars if needed
+        from data.database import supabase
+
+        path = f"banners/{guild_id}/{user_id}/rank_banner.{ext}"
+        supabase.storage.from_("rank-banners").upload(
+            path=path,
+            file=data,
+            file_options={
+                "content-type": mime,
+                "cache-control": "public, max-age=31536000, immutable",
+            },
+            upsert=True,
+        )
+        return path
+
+    @app_commands.command(
+        name="rank-set-banner",
+        description="Upload a custom rank banner (scaled to 1600x400).",
+    )
+    @app_commands.describe(image="PNG/JPEG/WebP, up to 2 MB")
+    async def rank_set_banner(
+        self, interaction: discord.Interaction, image: discord.Attachment
+    ):
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            if image.content_type not in config.ALLOWED_MIME:
+                return await interaction.followup.send(
+                    "Unsupported file type. Please upload PNG, JPEG, or WebP.",
+                    ephemeral=True,
+                )
+            if image.size > config.MAX_UPLOAD_BYTES:
+                return await interaction.followup.send(
+                    "File too large. Please keep it under 2 MB.", ephemeral=True
+                )
+
+            raw = await image.read()
+            processed, mime, ext = self._process_banner_bytes(raw, prefer_webp=True)
+            path = await self._upload_banner(
+                interaction.user.id, interaction.guild.id, processed, mime, ext
+            )
+
+            database.set_profile_banner_path(
+                interaction.user.id, interaction.guild.id, path
+            )
+            await interaction.followup.send(
+                "✅ Banner updated! Use `/rank` to see it.", ephemeral=True
+            )
+        except Exception as e:
+            logging.exception("rank-set-banner failed")
+            await interaction.followup.send(
+                ("Failed to set banner. Please try again. %s", e), ephemeral=True
+            )
+
+    @app_commands.command(
+        name="rank-remove-banner", description="Remove your custom rank banner."
+    )
+    async def rank_remove_banner(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            # Optional: also delete from storage; keeping it simple: just clear the path
+            database.set_profile_banner_path(
+                interaction.user.id, interaction.guild.id, None
+            )
+            await interaction.followup.send(
+                "✅ Banner removed. Your rank card will use the default background.",
+                ephemeral=True,
+            )
+        except Exception as e:
+            logging.exception("rank-remove-banner failed")
+            await interaction.followup.send(
+                ("Failed to remove banner. Please try again. %s", e), ephemeral=True
+            )
+
+    @app_commands.command(
+        name="rank-set-colors",
+        description="Set primary/accent colors for your rank card (hex like #FF8800).",
+    )
+    @app_commands.describe(
+        primary="Primary hex color (#RRGGBB)", accent="Accent hex color (#RRGGBB)"
+    )
+    async def rank_set_colors(
+        self,
+        interaction: discord.Interaction,
+        primary: str | None = None,
+        accent: str | None = None,
+    ):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            if primary is None and accent is None:
+                return await interaction.followup.send(
+                    "Provide at least one color.", ephemeral=True
+                )
+
+            if primary is not None and not self._is_hex(primary):
+                return await interaction.followup.send(
+                    "Invalid primary color. Use hex like `#1E90FF`.", ephemeral=True
+                )
+            if accent is not None and not self._is_hex(accent):
+                return await interaction.followup.send(
+                    "Invalid accent color. Use hex like `#FFD700`.", ephemeral=True
+                )
+
+            database.set_profile_colors(
+                interaction.user.id, interaction.guild.id, primary, accent
+            )
+            await interaction.followup.send(
+                "✅ Colors saved! Use `/rank` to see them.", ephemeral=True
+            )
+        except Exception as e:
+            logging.exception("rank-set-colors failed")
+            await interaction.followup.send(
+                ("Failed to save colors. Please try again. %s", e), ephemeral=True
+            )
 
 
 async def setup(bot: commands.Bot):

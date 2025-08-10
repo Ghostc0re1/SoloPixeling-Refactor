@@ -3,7 +3,7 @@ from typing import Optional, Tuple, Union
 from dataclasses import dataclass
 
 import discord
-from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageChops
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageChops, ImageOps
 
 import config
 
@@ -48,6 +48,18 @@ class TextDrawSpec:
             stroke_width=self.stroke_width,
             stroke_fill=self.outline_color,
         )
+
+
+def _hex_to_rgb(
+    s: Optional[str], default: tuple[int, int, int]
+) -> tuple[int, int, int]:
+    """Parse '#RRGGBB' -> (r,g,b). Returns default on None/invalid."""
+    if not s or not isinstance(s, str) or len(s) != 7 or not s.startswith("#"):
+        return default
+    try:
+        return tuple(int(s[i : i + 2], 16) for i in (1, 3, 5))  # type: ignore[return-value]
+    except Exception:
+        return default
 
 
 #
@@ -344,11 +356,7 @@ async def generate_levelup_banner(user: discord.User, new_role: str) -> discord.
     return discord.File(fp=buf, filename="levelup.png")
 
 
-# pylint: disable=too-many-arguments
-# pylint: disable=too-many-positional-arguments
-# pylint: disable=too-many-locals
-# pylint: disable=too-many-branches
-# pylint: disable=too-many-statements
+# pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches,too-many-statements
 async def generate_rank_card(
     member: discord.Member,
     level: int,
@@ -356,53 +364,70 @@ async def generate_rank_card(
     current_xp: int,
     required_xp: int,
     total_xp: int,
+    *,
+    primary_color: Optional[str] = None,  # NEW: '#RRGGBB'
+    accent_color: Optional[str] = None,  # NEW: '#RRGGBB'
+    banner_bytes: Optional[bytes] = None,
 ) -> discord.File:
     """
-    Generates a rank card with a semi-transparent background and rounded corners,
-    while keeping the avatar, text, and XP bar fully opaque.
+    Generates a rank card. Supports optional custom banner background and theming via hex colors.
+    - primary_color : affects large headings / totals (default white)
+    - accent_color  : affects rank label and XP bar color (default golden/yellow)
+    - banner_bytes  : used as the card background with a soft dark overlay
     """
+    # ---- THEME COLORS (with graceful fallbacks) ----
+    white = (255, 255, 255)
+    black = (0, 0, 0)
+    default_accent = (248, 184, 48)  # your yellow
+    prim_rgb = _hex_to_rgb(primary_color, white)
+    acc_rgb = _hex_to_rgb(accent_color, default_accent)
+
+    # ---- BACKGROUND ----
     try:
-        # Step 1: Load the background and make it semi-transparent
-        card_bg = (
-            Image.open(config.RANK_CARD_BACKGROUND_PATH)
-            .convert("RGBA")
-            .resize((config.CARD_WIDTH, config.CARD_HEIGHT))
-        )
-        alpha = card_bg.getchannel("A")
-        # Make the background 50% transparent
-        alpha = alpha.point(lambda p: p * 0.5)
-        card_bg.putalpha(alpha)
+        if banner_bytes:
+            bg = Image.open(BytesIO(banner_bytes)).convert("RGBA")
+            bg = ImageOps.fit(
+                bg,
+                (config.CARD_WIDTH, config.CARD_HEIGHT),
+                Image.Resampling.LANCZOS,
+                centering=(0.5, 0.5),
+            )
+            overlay = Image.new("RGBA", bg.size, (0, 0, 0, 96))  # ~38% black
+            card_bg = Image.alpha_composite(bg, overlay)
+        else:
+            # Fallback to your default background, then reduce its alpha so foreground pops
+            card_bg = (
+                Image.open(config.RANK_CARD_BACKGROUND_PATH)
+                .convert("RGBA")
+                .resize((config.CARD_WIDTH, config.CARD_HEIGHT))
+            )
+            alpha = card_bg.getchannel("A")
+            alpha = alpha.point(lambda p: p * 0.5)  # 50% transparency
+            card_bg.putalpha(alpha)
     except FileNotFoundError:
-        # Fallback to a solid, semi-transparent color
         card_bg = Image.new(
             "RGBA", (config.CARD_WIDTH, config.CARD_HEIGHT), (54, 57, 63, 128)
         )
 
-    # Step 2: Create a transparent layer for the foreground elements
+    # ---- FOREGROUND LAYER ----
     foreground = Image.new("RGBA", card_bg.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(foreground)
 
-    # --- Use the passed-in values directly ---
+    # --- Progress math ---
     progress_percent = max(
         0.0, min(1.0, current_xp / required_xp if required_xp > 0 else 0)
     )
+    remaining_xp = max(0, required_xp - current_xp)
 
-    remaining_xp = required_xp - current_xp
-
-    # --- Fonts and Colors ---
+    # --- Fonts ---
     font_user = _load_font(64)
     font_rank = _load_font(52)
     font_level = _load_font(84)
     font_remaining_xp = _load_font(36)
     font_total_xp = _load_font(64)
     font_xp = _load_font(24)
-    white = (255, 255, 255)
-    black = (0, 0, 0)
-    yellow = (248, 184, 48)
-    bar_fill_color = (248, 184, 48)
-    bar_bg_color = (50, 50, 50, 180)
 
-    # --- Rank text–gap logic ---
+    # --- Rank gap calc ---
     if rank is not None:
         if rank < 10:
             rank_text_gap = 325
@@ -416,7 +441,7 @@ async def generate_rank_card(
         rank = "unknown"
         rank_text_gap = 365
 
-    # --- Level text–gap logic ---
+    # --- Level gap calc ---
     if level is not None:
         if level < 10:
             level_text_gap = 0
@@ -430,7 +455,7 @@ async def generate_rank_card(
         level = "unknown"
         level_text_gap = 0
 
-    # Avatar pasting logic
+    # --- Avatar ---
     avatar_size = 300
     if member.avatar:
         asset = member.avatar.replace(size=128)
@@ -445,71 +470,71 @@ async def generate_rank_card(
         )
         foreground.paste(av, (50, 50), mask)
 
-    # --- Text Elements ---
     stroke_width = 1
 
-    # 1. Username (Outlined: white text, black outline)
+    # --- Username (uses primary color) ---
     draw_text(
         draw,
         position=(375, 285),
         text=member.display_name,
         font=font_user,
-        fill_color=white,
+        fill_color=prim_rgb,
         anchor="lb",
     )
 
-    # 2. Rank (Not outlined: just anthracite text)
+    # --- Rank label (uses accent color) ---
     draw_text(
         draw,
         position=(config.CARD_WIDTH - (50 + level_text_gap) - rank_text_gap, 72.5),
         text=f"RANK #{rank}",
         font=font_rank,
-        fill_color=yellow,
+        fill_color=acc_rgb,
         anchor="rt",
     )
 
-    # 3. Level (Outlined: white text, black outline)
+    # --- Level (uses primary color) ---
     draw_text(
         draw,
         position=(config.CARD_WIDTH - 50, 50),
         text=f"LEVEL {level}",
         font=font_level,
-        fill_color=white,
+        fill_color=prim_rgb,
         anchor="rt",
     )
 
-    # 4. Remaining XP (Outlined: white text, black outline)
+    # --- Remaining XP (primary) ---
     draw_text(
         draw,
         position=(config.CARD_WIDTH - 50, 205),
         text=f"{remaining_xp} XP left",
         font=font_remaining_xp,
-        fill_color=white,
+        fill_color=prim_rgb,
         anchor="rb",
     )
 
-    # 5. Total XP (Outlined: white text, black outline)
+    # --- Total XP (primary) ---
     draw_text(
         draw,
         position=(config.CARD_WIDTH - 50, 275),
         text=f"{total_xp} XP",
         font=font_total_xp,
-        fill_color=white,
+        fill_color=prim_rgb,
         anchor="rb",
     )
 
-    # --- XP Bar and Text ---
+    # --- XP Bar ---
     bar_x, bar_y = 375, config.CARD_HEIGHT - 100
     bar_width, bar_height = config.CARD_WIDTH - avatar_size - 115, 50
+    bar_bg_color = (50, 50, 50, 180)
+    bar_fill_color = (*acc_rgb, 255)  # use accent color for the fill
 
-    # Bar background (Unchanged)
+    # Background
     draw.rounded_rectangle(
         [(bar_x, bar_y), (bar_x + bar_width, bar_y + bar_height)],
         radius=25,
         fill=bar_bg_color,
     )
-
-    # Bar fill (Unchanged, uses the new progress_percent)
+    # Fill
     if progress_percent > 0:
         fill_width = int(bar_width * progress_percent)
         draw.rounded_rectangle(
@@ -518,7 +543,7 @@ async def generate_rank_card(
             fill=bar_fill_color,
         )
 
-    # --- UPDATED: XP text uses the new arguments ---
+    # XP Text (primary with outline)
     xp_text = f"{current_xp} / {required_xp} XP"
     text_bbox = draw.textbbox((0, 0), xp_text, font=font_xp)
     text_x = bar_x + (bar_width - (text_bbox[2] - text_bbox[0])) / 2
@@ -528,32 +553,24 @@ async def generate_rank_card(
         (text_x, text_y),
         text=xp_text,
         font=font_xp,
-        fill_color=white,
+        fill_color=prim_rgb,
         outline_color=black,
         stroke_width=stroke_width,
         anchor="lt",
     )
 
-    # Step 3: Composite the opaque foreground onto the semi-transparent background
+    # --- Composite FG over BG, then round corners ---
     composite_image = Image.alpha_composite(card_bg, foreground)
 
-    # --- NEW (Corrected Method): Round the corners of the composite image ---
     corner_radius = 25
-
-    # Create a new, fully transparent image to be the final canvas
     final_canvas = Image.new("RGBA", composite_image.size, (0, 0, 0, 0))
-
-    # Create a mask with rounded corners
     corner_mask = Image.new("L", composite_image.size, 0)
     mask_draw = ImageDraw.Draw(corner_mask)
     mask_draw.rounded_rectangle(
         [(0, 0), composite_image.size], radius=corner_radius, fill=255
     )
-
     final_canvas.paste(composite_image, (0, 0), corner_mask)
-    # --- End of new code ---
 
-    # Step 5: Save the final rounded image to a buffer
     buf = BytesIO()
     final_canvas.save(buf, format="PNG")
     buf.seek(0)

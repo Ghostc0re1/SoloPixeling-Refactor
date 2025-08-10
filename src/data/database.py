@@ -106,19 +106,74 @@ def get_user(user_id: int, guild_id: int):
 def set_user_xp_and_level(user_id: int, guild_id: int, xp: int, level: int):
     """Creates or updates a user's record with new XP and level using upsert."""
     supabase.table("users").upsert(
-        {"user_id": user_id, "guild_id": guild_id, "xp": xp, "level": level}
+        {"user_id": user_id, "guild_id": guild_id, "xp": xp, "level": level},
+        on_conflict="user_id,guild_id",
     ).execute()
 
 
 #
 def get_user_rank(user_id: int, guild_id: int) -> int | None:
     """Gets a user's rank in the guild by calling the database function."""
-    response = supabase.rpc(
+    resp = supabase.rpc(
         "get_user_rank_in_guild", {"p_guild_id": guild_id, "p_user_id": user_id}
     ).execute()
-    if response.data:
-        return response.data[0]["rank"]
+    d = resp.data
+    if d is None:
+        return None
+    # scalar int
+    if isinstance(d, (int, float)):
+        return int(d)
+    # list of dicts (e.g., [{'rank': 3}]) or list of ints
+    if isinstance(d, list) and d:
+        if isinstance(d[0], dict) and "rank" in d[0]:
+            return int(d[0]["rank"])
+        if isinstance(d[0], (int, float)):
+            return int(d[0])
     return None
+
+
+def get_user_profile(user_id: int, guild_id: int) -> dict | None:
+    """Fetches a user's profile customization settings."""
+    response = (
+        supabase.table("user_profiles")
+        .select("*")
+        .eq("user_id", user_id)
+        .eq("guild_id", guild_id)
+        .execute()
+    )
+    if response.data:
+        return response.data[0]
+    return None
+
+
+def update_user_profile(user_id: int, guild_id: int, settings: dict) -> None:
+    """Updates a user's profile settings in the database."""
+    supabase.table("user_profiles").upsert(
+        {"user_id": user_id, "guild_id": guild_id, **settings},
+        on_conflict="user_id,guild_id",
+    ).execute()
+
+
+def set_profile_colors(
+    user_id: int, guild_id: int, primary: str | None, accent: str | None
+) -> None:
+    payload = {"user_id": user_id, "guild_id": guild_id}
+    if primary is not None:
+        payload["primary_color"] = primary
+    if accent is not None:
+        payload["accent_color"] = accent
+    supabase.table("user_profiles").upsert(
+        payload, on_conflict="user_id,guild_id"
+    ).execute()
+
+
+def set_profile_banner_path(
+    user_id: int, guild_id: int, banner_path: str | None
+) -> None:
+    supabase.table("user_profiles").upsert(
+        {"user_id": user_id, "guild_id": guild_id, "banner_path": banner_path},
+        on_conflict="user_id,guild_id",
+    ).execute()
 
 
 #

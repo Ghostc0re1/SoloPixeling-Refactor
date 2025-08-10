@@ -218,6 +218,8 @@ CARD_BG_COLOR = (54, 57, 63)
 CARD_WIDTH = 1600
 CARD_HEIGHT = 400
 TEXT_GAP = 25
+MAX_UPLOAD_BYTES = 2 * 1024 * 1024
+ALLOWED_MIME = {"image/png", "image/jpeg", "image/webp"}
 
 # === Role Update Alerts ===
 ROLE_ALERTS = [
