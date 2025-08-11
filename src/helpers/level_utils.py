@@ -77,7 +77,7 @@ class RankCardData:
 def xp_for_level(level: int) -> int:
     if level <= 0:
         return 0
-    return int(100 * (level**1.35))
+    return int(100 * (level**1.30))  # adjust xp gain rate here
 
 
 def level_from_xp(xp: int) -> int:
