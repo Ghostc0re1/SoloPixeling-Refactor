@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, time as dt_time
 import logging
 import time
 import random
+from typing import Optional
 from zoneinfo import ZoneInfo
 from io import BytesIO
 from PIL import Image, ImageOps
@@ -14,6 +15,7 @@ from discord import app_commands
 #
 import config
 from helpers.level_utils import (
+    RankCardData,
     xp_for_level,
     level_from_xp,
     fetch_banner_bytes,
@@ -22,6 +24,8 @@ from helpers.level_utils import (
 from helpers import image_utils
 from data import database
 from views.leaderboard_view import LeaderboardView
+
+logger = logging.getLogger(__name__)
 
 
 class Leveling(commands.Cog):
@@ -46,17 +50,18 @@ class Leveling(commands.Cog):
 
         # Cooldowns
         try:
-            self.guild_cooldowns = database.get_all_cooldowns()
-            self.guild_xp_ranges = database.get_all_xp_ranges()
-            print(f"Loaded XP ranges for {len(self.guild_xp_ranges)} guilds.")
-            all_channel_settings = database.get_all_channel_settings()
+            self.guild_cooldowns = await database.get_all_cooldowns()
+            self.guild_xp_ranges = await database.get_all_xp_ranges()
+            logger.info("Loaded XP ranges for %d guilds.", len(self.guild_xp_ranges))
+            all_channel_settings = await database.get_all_channel_settings()
             for guild_id, settings in all_channel_settings.items():
                 if settings.get("levelup"):
                     self.guild_levelup_channels[guild_id] = settings["levelup"]
-            print(
-                f"Loaded level-up channel settings for {len(self.guild_levelup_channels)} guilds."
+            logger.info(
+                "Loaded level-up channel settings for %d guilds.",
+                len(self.guild_levelup_channels),
             )
-            print(f"Loaded cooldowns for {len(self.guild_cooldowns)} guilds.")
+            logger.info("Loaded cooldowns for %d guilds.", len(self.guild_cooldowns))
 
             if not self._awards_started:
                 self.daily_award_task.start()
@@ -74,14 +79,14 @@ class Leveling(commands.Cog):
             return
 
         try:
-            res = self._process_xp_gain(message)
+            res = await self._process_xp_gain(message)
             if res and res.leveled_up:
                 await self._announce_levelup(message, res.new_level)
         except Exception as e:
             logging.error("Error processing XP gain for message %s: %s", message.id, e)
 
     # pylint: disable=too-many-locals
-    def _process_xp_gain(self, message: discord.Message) -> XpResult | None:
+    async def _process_xp_gain(self, message: discord.Message) -> XpResult | None:
         """Apply cooldown, award XP, persist, and return level-change info (or None if skipped)."""
         user_id = message.author.id
         guild_id = message.guild.id
@@ -98,15 +103,15 @@ class Leveling(commands.Cog):
 
         xp_gain = random.randint(*xp_range)
 
-        user_data = database.get_user(user_id, guild_id)
+        user_data = await database.get_user(user_id, guild_id)
         current_xp, _stored_level = user_data if user_data else (0, 0)
         current_level = level_from_xp(current_xp)
 
         new_total_xp = current_xp + xp_gain
         new_level = level_from_xp(new_total_xp)
 
-        database.set_user_xp_and_level(user_id, guild_id, new_total_xp, new_level)
-        database.increment_daily_xp(user_id, guild_id, xp_gain)
+        await database.set_user_xp_and_level(user_id, guild_id, new_total_xp, new_level)
+        await database.increment_daily_xp(user_id, guild_id, xp_gain)
 
         leveled_up = new_level > current_level
         logging.debug(
@@ -183,13 +188,14 @@ class Leveling(commands.Cog):
     )
     @app_commands.describe(member="The member to check")
     async def rank(
-        self, interaction: discord.Interaction, member: discord.Member = None
+        self, interaction: discord.Interaction, member: Optional[discord.Member] = None
     ):
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=False)
         try:
-            target_member = member or interaction.user
-            user_data = database.get_user(target_member.id, interaction.guild.id)
-            user_rank = database.get_user_rank(target_member.id, interaction.guild.id)
+            target = member or interaction.user
+
+            user_data = await database.get_user(target.id, interaction.guild.id)
+            user_rank = await database.get_user_rank(target.id, interaction.guild.id)
 
             if not user_data or user_rank is None:
                 return await interaction.followup.send(
@@ -197,48 +203,51 @@ class Leveling(commands.Cog):
                 )
 
             total_xp, level = user_data
-            xp_of_current_level_start = xp_for_level(level)
-            xp_of_next_level_start = xp_for_level(level + 1)
-            xp_progress = total_xp - xp_of_current_level_start
-            xp_needed = xp_of_next_level_start - xp_of_current_level_start
+            cur_level_xp = xp_for_level(level)
+            next_level_xp = xp_for_level(level + 1)
 
-            profile = (
-                database.get_user_profile(target_member.id, interaction.guild.id) or {}
+            data = (
+                await database.get_user_profile(target.id, interaction.guild.id) or {}
             )
-            primary = profile.get("primary_color")
-            accent = profile.get("accent_color")
-            banner_path = profile.get("banner_path")
+            primary = data.get("primary_color")
+            accent = data.get("accent_color")
+            banner_path = data.get("banner_path")
 
             banner_bytes = (
                 await fetch_banner_bytes(banner_path) if banner_path else None
             )
 
-            rank_card = await image_utils.generate_rank_card(
-                member=target_member,
+            card = RankCardData(
+                member=target,
                 level=level,
                 rank=user_rank,
-                current_xp=xp_progress,
-                required_xp=xp_needed,
+                current_xp=total_xp - cur_level_xp,
+                required_xp=next_level_xp - cur_level_xp,
                 total_xp=total_xp,
                 primary_color=primary,
                 accent_color=accent,
                 banner_bytes=banner_bytes,
             )
-            await interaction.followup.send(file=rank_card)
+
+            # assumes you updated the function signature to accept the dataclass
+            image_file = await image_utils.generate_rank_card(card)
+            await interaction.followup.send(file=image_file)
+
         except Exception as e:
-            logging.error("Error in /rank command: %s", e)
+            logging.exception("Error in /rank command")
             await interaction.followup.send(
-                "Could not generate rank card. Please try again later.", ephemeral=True
+                f"Could not generate rank card. Please try again later. Error: {e}",
+                ephemeral=True,
             )
 
     @app_commands.command(
-        name="leaderboard", description="Show the server's top users by level and XP."
+        name="leaderboard",
+        description="Show the server's top users by level and XP.",
     )
     async def leaderboard(self, interaction: discord.Interaction):
         await interaction.response.defer()
         try:
-            rows = database.get_leaderboard(interaction.guild.id, 200)
-
+            rows = await database.get_leaderboard(interaction.guild.id, 200)
             if not rows:
                 return await interaction.followup.send(
                     "No leaderboard data yet.", ephemeral=True
@@ -264,7 +273,7 @@ class Leveling(commands.Cog):
 
         for guild in self.bot.guilds:
             try:
-                top = database.get_daily_top_user(guild.id, yesterday)
+                top = await database.get_daily_top_user(guild.id, yesterday)
                 if not top:
                     continue
                 user_id, xp_gain = top
@@ -300,7 +309,7 @@ class Leveling(commands.Cog):
                 logging.error("Error in daily_award_task for guild %s: %s", guild.id, e)
 
         try:
-            database.reset_daily_xp(yesterday)
+            await database.reset_daily_xp(yesterday)
         except Exception as e:
             logging.error("Failed to reset daily XP for %s: %s", yesterday, e)
 
@@ -335,32 +344,12 @@ class Leveling(commands.Cog):
         if prefer_webp:
             canvas.convert("RGB").save(out, format="WEBP", quality=85, method=6)
             return out.getvalue(), "image/webp", "webp"
-        else:
-            canvas.convert("RGB").save(
-                out, format="JPEG", quality=85, optimize=True, progressive=True
-            )
-            return out.getvalue(), "image/jpeg", "jpg"
 
-    async def _upload_banner(
-        self, user_id: int, guild_id: int, data: bytes, mime: str, ext: str
-    ) -> str:
-        """
-        Uploads to Supabase Storage and returns storage path (not full URL).
-        Example path: banners/<guild>/<user>/rank_banner.webp
-        """
-        # import here to avoid circulars if needed
-        from data.database import supabase
-
-        path = f"banners/{guild_id}/{user_id}/rank_banner.{ext}"
-        supabase.storage.from_("rank-banners").upload(
-            path=path,
-            file=data,
-            file_options={
-                "content-type": mime,
-                "cache-control": "public, max-age=31536000, immutable",
-            },
+        # This code only runs if the 'if' block didn't execute and return.
+        canvas.convert("RGB").save(
+            out, format="JPEG", quality=85, optimize=True, progressive=True
         )
-        return path
+        return out.getvalue(), "image/jpeg", "jpg"
 
     @app_commands.command(
         name="rank-set-banner",
@@ -385,12 +374,8 @@ class Leveling(commands.Cog):
 
             raw = await image.read()
             processed, mime, ext = self._process_banner_bytes(raw, prefer_webp=True)
-            path = await self._upload_banner(
+            await database.set_rank_banner(
                 interaction.user.id, interaction.guild.id, processed, mime, ext
-            )
-
-            database.set_profile_banner_path(
-                interaction.user.id, interaction.guild.id, path
             )
             await interaction.followup.send(
                 "✅ Banner updated! Use `/rank` to see it.", ephemeral=True
@@ -398,7 +383,7 @@ class Leveling(commands.Cog):
         except Exception as e:
             logging.exception("rank-set-banner failed")
             await interaction.followup.send(
-                ("Failed to set banner. Please try again. %s", e), ephemeral=True
+                f"Failed to set banner. Please try again. {e}", ephemeral=True
             )
 
     @app_commands.command(
@@ -407,9 +392,8 @@ class Leveling(commands.Cog):
     async def rank_remove_banner(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
-            # Optional: also delete from storage; keeping it simple: just clear the path
-            database.set_profile_banner_path(
-                interaction.user.id, interaction.guild.id, None
+            await database.remove_rank_banner(
+                interaction.user.id, interaction.guild.id, delete_file=False
             )
             await interaction.followup.send(
                 "✅ Banner removed. Your rank card will use the default background.",
@@ -418,7 +402,7 @@ class Leveling(commands.Cog):
         except Exception as e:
             logging.exception("rank-remove-banner failed")
             await interaction.followup.send(
-                ("Failed to remove banner. Please try again. %s", e), ephemeral=True
+                f"Failed to remove banner. Please try again. {e}", ephemeral=True
             )
 
     @app_commands.command(
@@ -450,7 +434,7 @@ class Leveling(commands.Cog):
                     "Invalid accent color. Use hex like `#FFD700`.", ephemeral=True
                 )
 
-            database.set_profile_colors(
+            await database.set_profile_colors(
                 interaction.user.id, interaction.guild.id, primary, accent
             )
             await interaction.followup.send(
@@ -469,7 +453,9 @@ class Leveling(commands.Cog):
     async def rank_reset_colors(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
-            database.clear_profile_colors(interaction.user.id, interaction.guild.id)
+            await database.clear_profile_colors(
+                interaction.user.id, interaction.guild.id
+            )
             await interaction.followup.send(
                 "✅ Colors reset to defaults.", ephemeral=True
             )

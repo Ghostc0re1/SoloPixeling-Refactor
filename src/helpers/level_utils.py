@@ -4,6 +4,7 @@ import logging
 import time
 from typing import Optional
 import os
+import discord
 from dotenv import load_dotenv
 
 import aiohttp
@@ -56,6 +57,21 @@ class XPStatus:
     next_level_xp: int
     xp_into_level: int
     xp_to_next: int
+
+
+@dataclass(frozen=True)
+class RankCardData:
+    """A container for all data needed to generate a rank card."""
+
+    member: discord.Member
+    level: int
+    rank: int
+    current_xp: int
+    required_xp: int
+    total_xp: int
+    primary_color: Optional[str] = None
+    accent_color: Optional[str] = None
+    banner_bytes: Optional[bytes] = None
 
 
 def xp_for_level(level: int) -> int:

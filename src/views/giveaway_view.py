@@ -1,4 +1,4 @@
-# views/giveaway_view.py
+# src/views/giveaway_view.py
 
 import discord
 from data import database as db
@@ -40,12 +40,13 @@ class GiveawayView(discord.ui.View):
     async def enter_button(
         self, interaction: discord.Interaction, _: discord.ui.Button
     ):
+        rec = await db.get_giveaway_by_id(interaction.message.id)
+        if not rec or not rec.get("is_active"):
+            return await interaction.response.send_message(
+                "That giveaway has ended.", ephemeral=True
+            )
 
-        success, message = await db.add_entry(
-            interaction.message.id, interaction.user.id
-        )
-
-        await interaction.response.send_message(message, ephemeral=True)
-
+        success, msg = await db.add_entry(interaction.message.id, interaction.user.id)
+        await interaction.response.send_message(msg, ephemeral=True)
         if success:
             await self._update_entry_count(interaction.message)

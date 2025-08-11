@@ -188,10 +188,13 @@ async def test_removeallxp_no_xp(cog, interaction):
     member = MagicMock(spec=discord.Member)
     member.mention = "@mem"
     member.roles = []
-    with patch("cogs.settings.database.get_user", return_value=None):
+
+    # Patch the EXACT attribute your cog uses (likely "db")
+    with patch("cogs.settings.database.get_user", new=AsyncMock(return_value=None)):
         await call_cmd(SettingsCog.removeallxp, cog, interaction, member)
+
     interaction.followup.send.assert_called_once()
-    assert "no XP" in interaction.followup.send.call_args[0][0]
+    assert "no xp" in interaction.followup.send.call_args[0][0].lower()
 
 
 @pytest.mark.asyncio
@@ -201,21 +204,23 @@ async def test_removeallxp_clears_db_and_removes_roles(cog, interaction, monkeyp
     member.add_roles = AsyncMock()
     member.remove_roles = AsyncMock()
     member.id = 55
-    # They had high level role before
+
     r = MagicMock(spec=discord.Role)
     r.id = 9001
     r.name = "Elite"
     member.roles = [r]
 
-    # config ROLE_REWARDS mapping
     monkeypatch.setattr("cogs.settings.config.ROLE_REWARDS", {10: r.id}, raising=True)
+    interaction.guild.get_role.return_value = r
 
-    # DB: user had xp+level
-    with patch("cogs.settings.database.get_user", return_value=(1234, 10)), patch(
-        "cogs.settings.database.set_user_xp_and_level"
-    ) as set_user, patch("cogs.settings.build_xp_status") as build_status:
+    with patch(
+        "cogs.settings.database.get_user", new=AsyncMock(return_value=(1234, 10))
+    ), patch(
+        "cogs.settings.database.set_user_xp_and_level", new=AsyncMock()
+    ) as set_user, patch(
+        "cogs.settings.build_xp_status"
+    ) as build_status:
 
-        # new status after wipe
         status = MagicMock()
         status.total_xp = 0
         status.level = 0
@@ -223,14 +228,12 @@ async def test_removeallxp_clears_db_and_removes_roles(cog, interaction, monkeyp
         status.xp_to_next = 100
         build_status.return_value = status
 
-        # guild.get_role returns our role
-        interaction.guild.get_role.return_value = r
-
         await call_cmd(SettingsCog.removeallxp, cog, interaction, member)
 
-    set_user.assert_called_once_with(member.id, interaction.guild.id, 0, 0)
-    # removed role since threshold crossed downward
-    member.remove_roles.assert_called_once()
+        # Because production awaits this, assert awaited:
+        set_user.assert_awaited_once_with(member.id, interaction.guild.id, 0, 0)
+
+    member.remove_roles.assert_awaited_once()  # it’s an AsyncMock
     interaction.followup.send.assert_called_once()
 
 
@@ -244,7 +247,7 @@ async def test_addxp_awards_roles_and_updates_db(cog, interaction, monkeypatch):
     member.add_roles = AsyncMock()
     member.remove_roles = AsyncMock()
     member.id = 99
-    # make the role to award
+
     role = MagicMock(spec=discord.Role)
     role.id = 222
     role.name = "Champion"
@@ -252,13 +255,16 @@ async def test_addxp_awards_roles_and_updates_db(cog, interaction, monkeypatch):
 
     monkeypatch.setattr("cogs.settings.config.ROLE_REWARDS", {5: role.id}, raising=True)
 
-    with patch("cogs.settings.database.get_user", return_value=(10, 0)), patch(
-        "cogs.settings.database.set_user_xp_and_level"
-    ) as set_user, patch("cogs.settings.build_xp_status") as build_status, patch(
+    with patch(
+        "cogs.settings.database.get_user", new=AsyncMock(return_value=(10, 0))
+    ), patch(
+        "cogs.settings.database.set_user_xp_and_level", new=AsyncMock()
+    ) as set_user, patch(
+        "cogs.settings.build_xp_status"
+    ) as build_status, patch(
         "cogs.settings.level_from_xp", return_value=1
     ):
 
-        # new status will say level 5 achieved
         status = MagicMock()
         status.total_xp = 999
         status.level = 5
@@ -268,8 +274,9 @@ async def test_addxp_awards_roles_and_updates_db(cog, interaction, monkeypatch):
 
         await call_cmd(SettingsCog.addxp, cog, interaction, member, amount=989)
 
-    set_user.assert_called_once_with(member.id, interaction.guild.id, 999, 5)
-    member.add_roles.assert_called_once()
+        set_user.assert_awaited_once_with(member.id, interaction.guild.id, 999, 5)
+
+    member.add_roles.assert_awaited_once()
     interaction.followup.send.assert_called_once()
 
 
@@ -279,12 +286,11 @@ async def test_addxp_awards_roles_and_updates_db(cog, interaction, monkeypatch):
 @pytest.mark.asyncio
 async def test_removexp_drops_roles_and_updates_db(cog, interaction, monkeypatch):
     member = MagicMock(spec=discord.Member)
-    member.mention = "@mem"
+    member.mention = "@m"
     member.add_roles = AsyncMock()
     member.remove_roles = AsyncMock()
     member.id = 77
-    member.mention = "@m"
-    # they currently have the role we'll drop
+
     role = MagicMock(spec=discord.Role)
     role.id = 333
     role.name = "Gold"
@@ -293,13 +299,16 @@ async def test_removexp_drops_roles_and_updates_db(cog, interaction, monkeypatch
 
     monkeypatch.setattr("cogs.settings.config.ROLE_REWARDS", {3: role.id}, raising=True)
 
-    with patch("cogs.settings.database.get_user", return_value=(250, 3)), patch(
-        "cogs.settings.database.set_user_xp_and_level"
-    ) as set_user, patch("cogs.settings.build_xp_status") as build_status, patch(
+    with patch(
+        "cogs.settings.database.get_user", new=AsyncMock(return_value=(250, 3))
+    ), patch(
+        "cogs.settings.database.set_user_xp_and_level", new=AsyncMock()
+    ) as set_user, patch(
+        "cogs.settings.build_xp_status"
+    ) as build_status, patch(
         "cogs.settings.level_from_xp", return_value=3
     ):
 
-        # after removal, status shows level fell to 2
         status = MagicMock()
         status.total_xp = 100
         status.level = 2
@@ -309,6 +318,7 @@ async def test_removexp_drops_roles_and_updates_db(cog, interaction, monkeypatch
 
         await call_cmd(SettingsCog.removexp, cog, interaction, member, amount=150)
 
-    set_user.assert_called_once_with(member.id, interaction.guild.id, 100, 2)
-    member.remove_roles.assert_called_once()
+        set_user.assert_awaited_once_with(member.id, interaction.guild.id, 100, 2)
+
+    member.remove_roles.assert_awaited_once()
     interaction.followup.send.assert_called_once()

@@ -30,7 +30,7 @@ class SettingsCog(commands.Cog, name="Settings"):
         self, interaction: discord.Interaction, channel: discord.TextChannel
     ):
         guild_id = interaction.guild.id
-        database.set_welcome_channel(guild_id, channel.id)
+        await database.set_welcome_channel(guild_id, channel.id)
 
         events_cog = self.bot.get_cog("Events")
         if events_cog:
@@ -52,7 +52,7 @@ class SettingsCog(commands.Cog, name="Settings"):
     ):
         guild_id = interaction.guild.id
 
-        database.set_levelup_channel(guild_id, channel.id)
+        await database.set_levelup_channel(guild_id, channel.id)
 
         leveling_cog = self.bot.get_cog("Leveling")
         if leveling_cog:
@@ -123,7 +123,7 @@ class SettingsCog(commands.Cog, name="Settings"):
                 return
 
             guild_id = interaction.guild.id
-            database.set_xp_cooldown(guild_id, seconds)
+            await database.set_xp_cooldown(guild_id, seconds)
             leveling_cog = self.bot.get_cog("Leveling")
             if leveling_cog:
                 leveling_cog.guild_cooldowns[guild_id] = seconds
@@ -155,7 +155,7 @@ class SettingsCog(commands.Cog, name="Settings"):
                 return
 
             guild_id = interaction.guild.id
-            database.update_xp_range(guild_id, min_xp, max_xp)
+            await database.update_xp_range(guild_id, min_xp, max_xp)
             leveling_cog = self.bot.get_cog("Leveling")
             if leveling_cog:
                 leveling_cog.guild_xp_ranges[guild_id] = (min_xp, max_xp)
@@ -179,7 +179,7 @@ class SettingsCog(commands.Cog, name="Settings"):
     ):
         await interaction.response.defer(ephemeral=True)
         try:
-            user_data = database.get_user(member.id, interaction.guild.id)
+            user_data = await database.get_user(member.id, interaction.guild.id)
             old_total_xp, old_level = user_data if user_data else (0, 0)
 
             if old_total_xp == 0:
@@ -188,7 +188,7 @@ class SettingsCog(commands.Cog, name="Settings"):
                 )
                 return
 
-            database.set_user_xp_and_level(member.id, interaction.guild.id, 0, 0)
+            await database.set_user_xp_and_level(member.id, interaction.guild.id, 0, 0)
             new_status = build_xp_status(0)
 
             removed = []
@@ -226,13 +226,13 @@ class SettingsCog(commands.Cog, name="Settings"):
     ):
         await interaction.response.defer(ephemeral=True)
         try:
-            user_data = database.get_user(member.id, interaction.guild.id)
+            user_data = await database.get_user(member.id, interaction.guild.id)
             current_xp = user_data[0] if user_data else 0
             old_level = level_from_xp(current_xp)
 
             new_total_xp = current_xp + amount
             new_status = build_xp_status(new_total_xp)
-            database.set_user_xp_and_level(
+            await database.set_user_xp_and_level(
                 member.id, interaction.guild.id, new_total_xp, new_status.level
             )
 
@@ -271,13 +271,13 @@ class SettingsCog(commands.Cog, name="Settings"):
         await interaction.response.defer(ephemeral=True)
 
         try:
-            user_data = database.get_user(member.id, interaction.guild.id)
+            user_data = await database.get_user(member.id, interaction.guild.id)
             current_xp = user_data[0] if user_data else 0
             old_level = level_from_xp(current_xp)
 
             new_total_xp = max(0, current_xp - amount)
             new_status = build_xp_status(new_total_xp)
-            database.set_user_xp_and_level(
+            await database.set_user_xp_and_level(
                 member.id, interaction.guild.id, new_total_xp, new_status.level
             )
 

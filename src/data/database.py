@@ -1,7 +1,10 @@
 # database.py
 
-from datetime import datetime
+import asyncio
+from datetime import datetime, timezone
+import logging
 import os
+import tempfile
 import discord
 from dotenv import load_dotenv
 from supabase import create_client, Client
@@ -11,6 +14,7 @@ from supabase import create_client, Client
 # --- Initialization ---
 #
 load_dotenv()
+logger = logging.getLogger(__name__)
 #
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
@@ -20,36 +24,51 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 #
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+_DB_SEM = asyncio.Semaphore(8)
+
+
+async def _db(call):
+    async with _DB_SEM:
+        return await asyncio.to_thread(call)
+
 
 #
 # --- Daily XP Functions ---
 #
-def increment_daily_xp(user_id: int, guild_id: int, amount: int):
+async def increment_daily_xp(user_id: int, guild_id: int, amount: int):
     """Adds XP to today's gain for a user by calling the database function."""
-    today = datetime.utcnow().strftime("%Y-%m-%d")
-    supabase.rpc(
-        "increment_daily_xp_for_user",
-        {
-            "p_guild_id": guild_id,
-            "p_user_id": user_id,
-            "p_date": today,
-            "p_amount": amount,
-        },
-    ).execute()
+
+    def _exec():
+        today = datetime.now(timezone.utc).date().isoformat()
+        supabase.rpc(
+            "increment_daily_xp_for_user",
+            {
+                "p_guild_id": guild_id,
+                "p_user_id": user_id,
+                "p_date": today,
+                "p_amount": amount,
+            },
+        ).execute()
+
+    await _db(_exec)
 
 
 #
-def get_daily_top_user(guild_id: int, date: str) -> tuple | None:
+async def get_daily_top_user(guild_id: int, date: str) -> tuple | None:
     """Returns (user_id, xp_gain) for the top gainer on `date` in this guild."""
-    response = (
-        supabase.table("daily_xp")
-        .select("user_id", "xp_gain")
-        .eq("guild_id", guild_id)
-        .eq("date", date)
-        .order("xp_gain", desc=True)
-        .limit(1)
-        .execute()
-    )
+
+    def _exec():
+        return (
+            supabase.table("daily_xp")
+            .select("user_id", "xp_gain")
+            .eq("guild_id", guild_id)
+            .eq("date", date)
+            .order("xp_gain", desc=True)
+            .limit(1)
+            .execute()
+        )
+
+    response = await _db(_exec)
     if response.data:
         top_user = response.data[0]
         return top_user["user_id"], top_user["xp_gain"]
@@ -57,26 +76,30 @@ def get_daily_top_user(guild_id: int, date: str) -> tuple | None:
 
 
 #
-def reset_daily_xp(date: str):
+async def reset_daily_xp(date: str):
     """Purges all rows for a given date."""
-    supabase.table("daily_xp").delete().eq("date", date).execute()
+
+    def _exec():
+        supabase.table("daily_xp").delete().eq("date", date).execute()
+
+    await _db(_exec)
 
 
 #
 # --- Cooldown Functions ---
 #
-def set_xp_cooldown(guild_id: int, seconds: int):
+async def set_xp_cooldown(guild_id: int, seconds: int):
     """Saves a new XP cooldown for a guild."""
-    set_guild_setting(guild_id, {"xp_cooldown": seconds})
+    await set_guild_setting(guild_id, {"xp_cooldown": seconds})
 
 
 #
-def get_all_cooldowns() -> dict[int, int]:
+async def get_all_cooldowns() -> dict[int, int]:
     """
     Loads all custom guild cooldowns by processing the main settings dump.
     """
-    all_settings = get_all_guild_settings()
-    cooldowns = {}
+    all_settings = await get_all_guild_settings()
+    cooldowns: dict[int, int] = {}
     for guild_id, settings in all_settings.items():
         if settings.get("xp_cooldown") is not None:
             cooldowns[guild_id] = settings["xp_cooldown"]
@@ -86,44 +109,53 @@ def get_all_cooldowns() -> dict[int, int]:
 #
 # --- User Level Functions ---
 #
-def get_user(user_id: int, guild_id: int):
+async def get_user(user_id: int, guild_id: int):
     """Fetches a user's XP and level from Supabase."""
-    response = (
-        supabase.table("users")
-        .select("xp", "level")
-        .eq("user_id", user_id)
-        .eq("guild_id", guild_id)
-        .execute()
-    )
+
+    def _exec():
+        return (
+            supabase.table("users")
+            .select("xp", "level")
+            .eq("user_id", user_id)
+            .eq("guild_id", guild_id)
+            .execute()
+        )
+
+    response = await _db(_exec)
     if response.data:
-        # Supabase returns a list, so we get the first item
         user_data = response.data[0]
         return user_data["xp"], user_data["level"]
-    return None  # Return None if user not found, matching fetchone() behavior
+    return None
 
 
 #
-def set_user_xp_and_level(user_id: int, guild_id: int, xp: int, level: int):
+async def set_user_xp_and_level(user_id: int, guild_id: int, xp: int, level: int):
     """Creates or updates a user's record with new XP and level using upsert."""
-    supabase.table("users").upsert(
-        {"user_id": user_id, "guild_id": guild_id, "xp": xp, "level": level},
-        on_conflict="user_id,guild_id",
-    ).execute()
+
+    def _exec():
+        supabase.table("users").upsert(
+            {"user_id": user_id, "guild_id": guild_id, "xp": xp, "level": level},
+            on_conflict="user_id,guild_id",
+        ).execute()
+
+    await _db(_exec)
 
 
 #
-def get_user_rank(user_id: int, guild_id: int) -> int | None:
+async def get_user_rank(user_id: int, guild_id: int) -> int | None:
     """Gets a user's rank in the guild by calling the database function."""
-    resp = supabase.rpc(
-        "get_user_rank_in_guild", {"p_guild_id": guild_id, "p_user_id": user_id}
-    ).execute()
+
+    def _exec():
+        return supabase.rpc(
+            "get_user_rank_in_guild", {"p_guild_id": guild_id, "p_user_id": user_id}
+        ).execute()
+
+    resp = await _db(_exec)
     d = resp.data
     if d is None:
         return None
-    # scalar int
     if isinstance(d, (int, float)):
         return int(d)
-    # list of dicts (e.g., [{'rank': 3}]) or list of ints
     if isinstance(d, list) and d:
         if isinstance(d[0], dict) and "rank" in d[0]:
             return int(d[0]["rank"])
@@ -132,29 +164,35 @@ def get_user_rank(user_id: int, guild_id: int) -> int | None:
     return None
 
 
-def get_user_profile(user_id: int, guild_id: int) -> dict | None:
+async def get_user_profile(user_id: int, guild_id: int) -> dict | None:
     """Fetches a user's profile customization settings."""
-    response = (
-        supabase.table("user_profiles")
-        .select("*")
-        .eq("user_id", user_id)
-        .eq("guild_id", guild_id)
-        .execute()
-    )
-    if response.data:
-        return response.data[0]
-    return None
+
+    def _exec():
+        return (
+            supabase.table("user_profiles")
+            .select("*")
+            .eq("user_id", user_id)
+            .eq("guild_id", guild_id)
+            .execute()
+        )
+
+    response = await _db(_exec)
+    return response.data[0] if response.data else None
 
 
-def update_user_profile(user_id: int, guild_id: int, settings: dict) -> None:
+async def update_user_profile(user_id: int, guild_id: int, settings: dict) -> None:
     """Updates a user's profile settings in the database."""
-    supabase.table("user_profiles").upsert(
-        {"user_id": user_id, "guild_id": guild_id, **settings},
-        on_conflict="user_id,guild_id",
-    ).execute()
+
+    def _exec():
+        supabase.table("user_profiles").upsert(
+            {"user_id": user_id, "guild_id": guild_id, **settings},
+            on_conflict="user_id,guild_id",
+        ).execute()
+
+    await _db(_exec)
 
 
-def set_profile_colors(
+async def set_profile_colors(
     user_id: int, guild_id: int, primary: str | None, accent: str | None
 ) -> None:
     payload = {"user_id": user_id, "guild_id": guild_id}
@@ -162,57 +200,70 @@ def set_profile_colors(
         payload["primary_color"] = primary
     if accent is not None:
         payload["accent_color"] = accent
-    supabase.table("user_profiles").upsert(
-        payload, on_conflict="user_id,guild_id"
-    ).execute()
+
+    def _exec():
+        supabase.table("user_profiles").upsert(
+            payload, on_conflict="user_id,guild_id"
+        ).execute()
+
+    await _db(_exec)
 
 
-def set_profile_banner_path(
+async def set_profile_banner_path(
     user_id: int, guild_id: int, banner_path: str | None
 ) -> None:
-    supabase.table("user_profiles").upsert(
-        {"user_id": user_id, "guild_id": guild_id, "banner_path": banner_path},
-        on_conflict="user_id,guild_id",
-    ).execute()
+    def _exec():
+        supabase.table("user_profiles").upsert(
+            {"user_id": user_id, "guild_id": guild_id, "banner_path": banner_path},
+            on_conflict="user_id,guild_id",
+        ).execute()
+
+    await _db(_exec)
 
 
-def clear_profile_colors(user_id: int, guild_id: int) -> None:
+async def clear_profile_colors(user_id: int, guild_id: int) -> None:
     # explicitly set both columns to NULL
-    supabase.table("user_profiles").upsert(
-        {
-            "user_id": user_id,
-            "guild_id": guild_id,
-            "primary_color": None,
-            "accent_color": None,
-        },
-        on_conflict="user_id,guild_id",
-    ).execute()
+    def _exec():
+        supabase.table("user_profiles").upsert(
+            {
+                "user_id": user_id,
+                "guild_id": guild_id,
+                "primary_color": None,
+                "accent_color": None,
+            },
+            on_conflict="user_id,guild_id",
+        ).execute()
+
+    await _db(_exec)
 
 
 #
 # --- Leaderboard Functions ---
 #
-def get_leaderboard(guild_id: int, top: int) -> list[tuple]:
+async def get_leaderboard(guild_id: int, top: int) -> list[tuple]:
     """Gets the top users for the leaderboard by total XP."""
-    response = (
-        supabase.table("users")
-        .select("user_id", "level", "xp")
-        .eq("guild_id", guild_id)
-        .order("xp", desc=True)
-        .limit(top)
-        .execute()
-    )
-    # Convert list of dicts to list of tuples to match original output format
+
+    def _exec():
+        return (
+            supabase.table("users")
+            .select("user_id", "level", "xp")
+            .eq("guild_id", guild_id)
+            .order("xp", desc=True)
+            .limit(top)
+            .execute()
+        )
+
+    response = await _db(_exec)
     return [(user["user_id"], user["level"], user["xp"]) for user in response.data]
 
 
 #
-def get_all_xp_ranges() -> dict[int, tuple[int, int]]:
+async def get_all_xp_ranges() -> dict[int, tuple[int, int]]:
     """
     Loads all custom guild XP ranges by processing the main settings dump.
     """
-    all_settings = get_all_guild_settings()
-    xp_ranges = {}
+    all_settings = await get_all_guild_settings()
+    xp_ranges: dict[int, tuple[int, int]] = {}
     for guild_id, settings in all_settings.items():
         # Ensure both min_xp and max_xp exist before adding
         min_xp = settings.get("min_xp")
@@ -223,20 +274,20 @@ def get_all_xp_ranges() -> dict[int, tuple[int, int]]:
 
 
 #
-def update_xp_range(guild_id: int, min_xp: int, max_xp: int):
+async def update_xp_range(guild_id: int, min_xp: int, max_xp: int):
     """Saves a new min/max XP range for a guild."""
-    set_guild_setting(guild_id, {"min_xp": min_xp, "max_xp": max_xp})
+    await set_guild_setting(guild_id, {"min_xp": min_xp, "max_xp": max_xp})
 
 
 #
 # --- Guild Settings ---
 #
-def get_all_channel_settings() -> dict[int, dict[str, int]]:
+async def get_all_channel_settings() -> dict[int, dict[str, int]]:
     """
     Loads all channel settings by processing the main settings dump.
     """
-    all_settings = get_all_guild_settings()
-    channel_settings = {}
+    all_settings = await get_all_guild_settings()
+    channel_settings: dict[int, dict[str, int]] = {}
     for guild_id, settings in all_settings.items():
         channel_settings[guild_id] = {
             "welcome": settings.get("welcome_channel_id"),
@@ -246,30 +297,35 @@ def get_all_channel_settings() -> dict[int, dict[str, int]]:
 
 
 #
-def set_guild_setting(guild_id: int, settings: dict):
-    """A generic function to update any guild setting using upsert."""
-    # Add the primary key to the settings dict for upsert
-    settings["guild_id"] = guild_id
-    supabase.table("guild_settings").upsert(settings).execute()
+async def set_guild_setting(guild_id: int, settings) -> dict:
+    """Upsert guild settings without mutating the input and without blocking the loop."""
+    payload = {"guild_id": guild_id, **dict(settings)}
+
+    def _exec():
+        return supabase.table("guild_settings").upsert(payload).execute()
+
+    return await _db(_exec)
 
 
 #
-def set_welcome_channel(guild_id: int, channel_id: int | None):
+async def set_welcome_channel(guild_id: int, channel_id: int | None):
     """Saves a new welcome channel for a guild."""
-    set_guild_setting(guild_id, {"welcome_channel_id": channel_id})
+    await set_guild_setting(guild_id, {"welcome_channel_id": channel_id})
 
 
-#
-def set_levelup_channel(guild_id: int, channel_id: int | None):
+async def set_levelup_channel(guild_id: int, channel_id: int | None):
     """Saves a new level-up channel for a guild."""
-    set_guild_setting(guild_id, {"levelup_channel_id": channel_id})
+    await set_guild_setting(guild_id, {"levelup_channel_id": channel_id})
 
 
 #
-def get_all_guild_settings() -> dict:
+async def get_all_guild_settings() -> dict:
     """Loads all guild settings from the database into a single dictionary."""
-    response = supabase.table("guild_settings").select("*").execute()
-    # Create a dictionary keyed by guild_id
+
+    def _exec():
+        return supabase.table("guild_settings").select("*").execute()
+
+    response = await _db(_exec)
     return {row["guild_id"]: row for row in response.data}
 
 
@@ -294,59 +350,296 @@ async def create_giveaway(
         "host_id": host.id,
         "is_active": True,
     }
-    supabase.table("giveaways").insert(giveaway_data).execute()
+
+    def _exec():
+        supabase.table("giveaways").insert(giveaway_data).execute()
+
+    await _db(_exec)
 
 
 async def add_entry(giveaway_id: int, user_id: int) -> tuple[bool, str]:
     """Adds a user entry to a giveaway. Returns (success, message)."""
-    try:
-        supabase.table("entries").insert(
-            {"giveaway_id": giveaway_id, "user_id": user_id}
-        ).execute()
-        return (True, "You have entered the giveaway!")
-    except Exception as e:
-        # We can check for that specific error code.
-        if "23505" in str(e):  # 23505 is PostgreSQL's unique_violation error code
-            return (False, "You have already entered this giveaway!")
-        print(f"Error adding entry: {e}")
-        return (False, "An error occurred while entering the giveaway.")
+
+    def _exec() -> tuple[bool, str]:
+        try:
+            supabase.table("entries").insert(
+                {"giveaway_id": giveaway_id, "user_id": user_id}
+            ).execute()
+            return (True, "You have entered the giveaway!")
+        except Exception as e:
+            # Check for PostgreSQL's unique_violation error code
+            if "23505" in str(e):
+                return (False, "You have already entered this giveaway!")
+
+            logger.exception("add_entry failed")
+            return (False, "An error occurred while entering the giveaway.")
+
+    return await _db(_exec)
 
 
 async def get_entry_count(giveaway_id: int) -> int:
     """Gets the number of entries for a giveaway."""
-    response = (
-        supabase.table("entries")
-        .select("id", count="exact")
-        .eq("giveaway_id", giveaway_id)
-        .execute()
-    )
+
+    def _exec():
+        return (
+            supabase.table("entries")
+            .select("id", count="exact")
+            .eq("giveaway_id", giveaway_id)
+            .execute()
+        )
+
+    response = await _db(_exec)
     return response.count
 
 
 async def get_active_giveaways() -> list:
     """Fetches all giveaways that are currently active."""
-    response = supabase.table("giveaways").select("*").eq("is_active", True).execute()
+
+    def _exec():
+        return supabase.table("giveaways").select("*").eq("is_active", True).execute()
+
+    response = await _db(_exec)
     return response.data
 
 
 async def get_giveaway_entrants(giveaway_id: int) -> list[int]:
     """Gets a list of user IDs for all entrants of a giveaway."""
-    response = (
-        supabase.table("entries")
-        .select("user_id")
-        .eq("giveaway_id", giveaway_id)
-        .execute()
-    )
+
+    def _exec():
+        return (
+            supabase.table("entries")
+            .select("user_id")
+            .eq("giveaway_id", giveaway_id)
+            .execute()
+        )
+
+    response = await _db(_exec)
     return [entry["user_id"] for entry in response.data]
 
 
 async def end_giveaway(message_id: int) -> bool:
-    # only flip if still active to avoid races
-    res = (
-        supabase.table("giveaways")
-        .update({"is_active": False})
-        .eq("message_id", message_id)
-        .eq("is_active", True)
-        .execute()
-    )
+    """Atomically marks a giveaway as inactive. Returns True if a row was changed."""
+
+    def _exec():
+        return (
+            supabase.table("giveaways")
+            .update({"is_active": False}, returning="representation")
+            .eq("message_id", message_id)
+            .eq("is_active", True)
+            .execute()
+        )
+
+    res = await _db(_exec)
     return bool(res.data)
+
+
+async def get_giveaway_by_id(message_id: int) -> dict | None:
+    """Fetches a single giveaway by its message ID."""
+
+    def _exec():
+        return (
+            supabase.table("giveaways")
+            .select("*")
+            .eq("message_id", message_id)
+            .limit(1)
+            .execute()
+        )
+
+    resp = await _db(_exec)
+    return resp.data[0] if resp.data else None
+
+
+async def list_active_giveaways_for_guild(guild_id: int) -> list[dict]:
+    """Lists all active giveaways for a specific guild."""
+
+    def _exec():
+        return (
+            supabase.table("giveaways")
+            .select("*")
+            .eq("guild_id", guild_id)
+            .eq("is_active", True)
+            .order("end_time", desc=False)
+            .execute()
+        )
+
+    resp = await _db(_exec)
+    return resp.data
+
+
+async def set_giveaway_end_time_now(message_id: int) -> None:
+    """Updates a giveaway's end time to the current time."""
+
+    def _exec():
+        supabase.table("giveaways").update(
+            {"end_time": datetime.now(timezone.utc).isoformat()}
+        ).eq("message_id", message_id).execute()
+
+    await _db(_exec)
+
+
+async def get_due_giveaways(now_iso: str) -> list[dict]:
+    def _exec():
+        return (
+            supabase.table("giveaways")
+            .select("*")
+            .eq("is_active", True)
+            .lte("end_time", now_iso)
+            .execute()
+        )
+
+    resp = await _db(_exec)
+    return resp.data
+
+
+async def upload_rank_banner(
+    user_id: int, guild_id: int, data: bytes, mime: str, ext: str
+) -> str:
+    path = f"banners/{guild_id}/{user_id}/rank_banner.{ext}"
+
+    def _exec():
+        # Try #1: some versions accept raw bytes directly
+        try:
+            return supabase.storage.from_("rank-banners").upload(
+                path=path,
+                file=data,  # <-- raw bytes, NOT BytesIO
+                file_options={
+                    # most clients read these camelCase keys
+                    "contentType": mime,
+                    "cacheControl": "public, max-age=31536000, immutable",
+                    # some versions honor x-upsert only via header-like option
+                    "x-upsert": "true",
+                },
+            )
+        except TypeError:
+            # Try #2: client wants a filesystem path
+            with tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=True) as tmp:
+                tmp.write(data)
+                tmp.flush()
+                return supabase.storage.from_("rank-banners").upload(
+                    path=path,
+                    file=tmp.name,  # <-- pass a str path
+                    file_options={
+                        "contentType": mime,
+                        "cacheControl": "public, max-age=31536000, immutable",
+                        "x-upsert": "true",
+                    },
+                )
+
+    await _db(_exec)
+    return path
+
+
+async def set_rank_banner(
+    user_id: int, guild_id: int, data: bytes, mime: str, ext: str
+) -> None:
+    """
+    Upload banner to Storage and save its path to user_profiles.banner_path.
+    Works across supabase-py variants (no upsert kwarg).
+    """
+    path = f"banners/{guild_id}/{user_id}/rank_banner.{ext}"
+    bucket = supabase.storage.from_("rank-banners")
+
+    def _meta(hyphenated: bool = True) -> dict:
+        # Try hyphenated first; some builds want underscored.
+        if hyphenated:
+            return {
+                "content-type": mime,
+                "cache-control": "public, max-age=31536000, immutable",
+            }
+        return {
+            "content_type": mime,
+            "cache_control": "public, max-age=31536000, immutable",
+        }
+
+    def _upload_bytes(fn):
+        # Call `fn(path=..., file=..., file_options=...)` with bytes first,
+        # then fall back to a temp file path if the client insists on str path.
+        try:
+            return fn(path=path, file=data, file_options=_meta(True))
+        except TypeError:
+            # try underscored keys with bytes
+            try:
+                return fn(path=path, file=data, file_options=_meta(False))
+            except TypeError:
+                # final fallback: write to temp file and pass path
+                with tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=True) as tmp:
+                    tmp.write(data)
+                    tmp.flush()
+                    try:
+                        return fn(path=path, file=tmp.name, file_options=_meta(True))
+                    except TypeError:
+                        return fn(path=path, file=tmp.name, file_options=_meta(False))
+
+    def _do_upload_or_update():
+        # 1) Try upload (new file)
+        try:
+            return _upload_bytes(bucket.upload)
+        except Exception as e:
+            # If duplicate/409 or your client raises here, try update (overwrite)
+            logging.debug("upload() failed, attempting update(): %r", e)
+            return _upload_bytes(bucket.update)
+
+    # do the storage write
+    resp = await _db(_do_upload_or_update)
+    logging.debug("rank banner storage response: %r", resp)
+
+    # persist the pointer
+    def _save_path():
+        return (
+            supabase.table("user_profiles")
+            .upsert(
+                {"user_id": user_id, "guild_id": guild_id, "banner_path": path},
+                on_conflict="user_id,guild_id",
+            )
+            .execute()
+        )
+
+    await _db(_save_path)
+
+
+async def remove_rank_banner(
+    user_id: int, guild_id: int, delete_file: bool = False
+) -> None:
+    """
+    Clear banner_path. Optionally also delete the file from Storage.
+    """
+
+    # Read current path (so we know what to delete if requested)
+    def _get():
+        return (
+            supabase.table("user_profiles")
+            .select("banner_path")
+            .eq("user_id", user_id)
+            .eq("guild_id", guild_id)
+            .limit(1)
+            .execute()
+        )
+
+    resp = await _db(_get)
+    current_path = resp.data[0]["banner_path"] if resp.data else None
+
+    # Clear pointer
+    def _clear():
+        return (
+            supabase.table("user_profiles")
+            .upsert(
+                {"user_id": user_id, "guild_id": guild_id, "banner_path": None},
+                on_conflict="user_id,guild_id",
+            )
+            .execute()
+        )
+
+    await _db(_clear)
+
+    # Delete underlying file if asked and known
+    if delete_file and current_path:
+
+        def _rm():
+            # Some clients want a list for remove()
+            return supabase.storage.from_("rank-banners").remove([current_path])
+
+        try:
+            await _db(_rm)
+        except Exception:
+            # don't hard-fail remove: storage cleanup best-effort
+            logging.exception("Failed to delete banner file %s", current_path)

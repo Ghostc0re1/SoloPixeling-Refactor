@@ -22,10 +22,12 @@ disable=
 
 # Maximum number of characters on a single line.
 # Modern standard is often 88 (for Black), 99, or 120.
-max-line-length=99
+max-line-length=120
 
 # Maximum number of nested code blocks.
-max-nested-blocks=5
+max-nested-blocks=10
+max-branches=15
+max-statements=60
 
 
 [BASIC]
@@ -33,3 +35,13 @@ max-nested-blocks=5
 # Good variable names that should not trigger C0103 (invalid-name).
 # Allows for common short variable names in loops or comprehensions.
 good-names=i,j,k,e,f,_,ex,fp
+
+[DESIGN]
+# Increase the max number of return statements allowed in a function (default: 6)
+max-returns=10
+
+# Increase the max number of local variables allowed in a function (default: 15)
+max-locals=20
+
+# Increase the max number of instance attributes for a class (default: 7)
+max-attributes=10

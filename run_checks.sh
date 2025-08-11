@@ -22,3 +22,15 @@ echo ""
 
 # --- Success ---
 echo "🎉 All checks passed successfully!"
+
+
+# --- 3. Freeze PIP ---
+echo "---  Freezing PIP ---"
+pip freeze > requirements.txt
+
+# --- 4. Freeze PIP Dev ---
+echo "---  Freezing PIP Dev ---"
+pip freeze > requirements-dev.txt
+
+
+echo "---  Job's Done. ---"

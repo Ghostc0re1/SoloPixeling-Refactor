@@ -198,7 +198,6 @@ async def test_view_update_entry_count_updates_existing_field(
 async def test_enter_button_success_updates_count(monkeypatch, user, channel):
     from views.giveaway_view import GiveawayView
 
-    # fake message with an embed missing Entries (should be added)
     msg = MagicMock(spec=discord.Message)
     msg.id = 777
     msg.embeds = []
@@ -210,6 +209,11 @@ async def test_enter_button_success_updates_count(monkeypatch, user, channel):
     inter.response = MagicMock()
     inter.response.send_message = AsyncMock()
 
+    # NEW: the view checks the giveaway is still active
+    monkeypatch.setattr(
+        "views.giveaway_view.db.get_giveaway_by_id",
+        AsyncMock(return_value={"is_active": True}),
+    )
     monkeypatch.setattr(
         "views.giveaway_view.db.add_entry", AsyncMock(return_value=(True, "ok"))
     )
@@ -240,15 +244,21 @@ async def test_enter_button_duplicate(monkeypatch, user):
     inter.response = MagicMock()
     inter.response.send_message = AsyncMock()
 
+    # NEW: still active, but duplicate add
+    monkeypatch.setattr(
+        "views.giveaway_view.db.get_giveaway_by_id",
+        AsyncMock(return_value={"is_active": True}),
+    )
     monkeypatch.setattr(
         "views.giveaway_view.db.add_entry", AsyncMock(return_value=(False, "already"))
     )
+
     view = GiveawayView()
     button = next(ch for ch in view.children if isinstance(ch, discord.ui.Button))
     await button.callback(inter)
 
     inter.response.send_message.assert_awaited()
-    msg.edit.assert_not_awaited()  # count shouldn't change
+    msg.edit.assert_not_awaited()
 
 
 # -------- Tests for ending logic --------
@@ -281,7 +291,6 @@ async def test_process_ended_giveaway_no_entrants_updates_embed(
     bot.get_guild.return_value = guild
     channel.fetch_message.return_value = sent_message
 
-    # start with an existing embed
     base = discord.Embed(title="🎉 Giveaway: Fancy Prize 🎉")
     base.add_field(name="Host", value="<@42>", inline=True)
     sent_message.embeds = [base]
@@ -294,18 +303,19 @@ async def test_process_ended_giveaway_no_entrants_updates_embed(
     await cog.process_ended_giveaway(giveaway_row)
 
     sent_message.edit.assert_awaited()
-    args, kwargs = sent_message.edit.await_args
+    _, kwargs = sent_message.edit.await_args
     assert kwargs["view"] is None
     emb = kwargs["embed"]
     assert emb.title == "🎉 Giveaway Ended! 🎉"
     fields = {f.name: f.value for f in emb.fields}
     assert fields["Prize"] == "Fancy Prize"
-    assert "no entries" in fields["Status"].lower()
+    # New code puts the “no winners” message into the Winners field
+    assert "no one" in fields["Winners"].lower()
 
 
 @pytest.mark.asyncio
 async def test_process_ended_giveaway_picks_winners(
-    monkeypatch, bot, channel, guild, sent_message, giveaway_row, user
+    monkeypatch, bot, channel, guild, sent_message, giveaway_row
 ):
     from cogs.giveaway import Giveaway, config
 
@@ -314,48 +324,43 @@ async def test_process_ended_giveaway_picks_winners(
     bot.get_guild.return_value = guild
     channel.fetch_message.return_value = sent_message
 
-    # embed existing
     base = discord.Embed(title="🎉 Giveaway: Fancy Prize 🎉")
     base.add_field(name="Winners", value="TBD", inline=False)
     sent_message.embeds = [base]
 
-    # entrants: 3 users
-    u1 = MagicMock(spec=discord.Member)
-    u1.id = 1
-    u1.mention = "<@1>"
-    u1.roles = []
-    u2 = MagicMock(spec=discord.Member)
-    u2.id = 2
-    u2.mention = "<@2>"
-    u2.roles = []
-    u3 = MagicMock(spec=discord.Member)
-    u3.id = 3
-    u3.mention = "<@3>"
-    u3.roles = []
-    guild.get_member.side_effect = lambda uid: {1: u1, 2: u2, 3: u3}.get(uid)
+    # Entrant members
+    def _mk(uid):
+        m = MagicMock(spec=discord.Member)
+        m.id = uid
+        m.mention = f"<@{uid}>"
+        m.roles = []
+        return m
+
+    members = {1: _mk(1), 2: _mk(2), 3: _mk(3)}
 
     monkeypatch.setattr("cogs.giveaway.db.end_giveaway", AsyncMock(return_value=True))
     monkeypatch.setattr(
         "cogs.giveaway.db.get_giveaway_entrants", AsyncMock(return_value=[1, 2, 3])
     )
 
-    # ensure weights are valid
+    # NEW: resolve entrants via fetch_member_safe (used inside _get_valid_entrants)
+    async def _fake_fetch_member_safe(guild_obj, uid):
+        return members.get(uid)
+
+    monkeypatch.setattr("cogs.giveaway.fetch_member_safe", _fake_fetch_member_safe)
+
     monkeypatch.setattr(config, "DEFAULT_WEIGHT", 1, raising=False)
     monkeypatch.setattr(config, "ROLE_WEIGHTS", {}, raising=False)
 
     await cog.process_ended_giveaway(giveaway_row)
 
     sent_message.edit.assert_awaited()
-    args, kwargs = sent_message.edit.await_args
+    _, kwargs = sent_message.edit.await_args
     emb = kwargs["embed"]
     assert emb.title == "🎉 Giveaway Ended! 🎉"
-    # Winners field present and mentions
-    winners_field = next(
-        (f for f in emb.fields if f.name.lower().startswith("winner")), None
-    )
-    assert winners_field is not None
-    assert "<@" in winners_field.value
-    sent_message.reply.assert_awaited()  # congratulatory message sent
+    winners_field = next((f for f in emb.fields if f.name == "Winners"), None)
+    assert winners_field and "<@" in winners_field.value
+    sent_message.reply.assert_awaited()
 
 
 # -------- Loop trigger test --------
@@ -366,15 +371,88 @@ async def test_check_giveaways_loop_triggers_processing(monkeypatch, bot, giveaw
     from cogs.giveaway import Giveaway
 
     cog = Giveaway(bot)
-
-    # Patch DB to return one active past-due giveaway
+    # NEW: loop queries due giveaways
     monkeypatch.setattr(
-        "cogs.giveaway.db.get_active_giveaways", AsyncMock(return_value=[giveaway_row])
+        "cogs.giveaway.db.get_due_giveaways", AsyncMock(return_value=[giveaway_row])
     )
     proc = AsyncMock()
     cog.process_ended_giveaway = proc
 
-    # Call loop body once directly (not starting the running loop)
     await cog.check_giveaways_loop.coro(cog)
 
     proc.assert_awaited_once_with(giveaway_row)
+
+
+@pytest.mark.asyncio
+async def test_process_xp_gain_happy_path_updates_db(monkeypatch):
+    from cogs.leveling import Leveling
+    from data import database as db
+
+    bot = MagicMock(spec=discord.Client)
+    guild = MagicMock(spec=discord.Guild)
+    guild.id = 1
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.id = 10
+    author = MagicMock(spec=discord.Member)
+    author.id = 99
+    author.bot = False
+    msg = MagicMock(spec=discord.Message)
+    msg.author = author
+    msg.guild = guild
+    msg.channel = channel
+
+    # mock DB calls as AsyncMock (these are awaited in the cog)
+    monkeypatch.setattr(
+        "cogs.leveling.database.get_user", AsyncMock(return_value=(0, 0))
+    )
+    su = AsyncMock()
+    inc = AsyncMock()
+    monkeypatch.setattr("cogs.leveling.database.set_user_xp_and_level", su)
+    monkeypatch.setattr("cogs.leveling.database.increment_daily_xp", inc)
+
+    cog = Leveling(bot)
+    # avoid randomness for determinism
+    monkeypatch.setattr("random.randint", lambda a, b: 5)
+
+    # call
+    res = await cog._process_xp_gain(msg)
+
+    assert res is not None and res.new_level >= 0
+    su.assert_awaited_once()  # <- was False before
+    inc.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_process_xp_gain_respects_cooldown(monkeypatch):
+    from cogs.leveling import Leveling
+
+    bot = MagicMock(spec=discord.Client)
+    guild = MagicMock(spec=discord.Guild)
+    guild.id = 1
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.id = 10
+    author = MagicMock(spec=discord.Member)
+    author.id = 99
+    author.bot = False
+    msg = MagicMock(spec=discord.Message)
+    msg.author = author
+    msg.guild = guild
+    msg.channel = channel
+
+    # DB reads/writes
+    monkeypatch.setattr(
+        "cogs.leveling.database.get_user", AsyncMock(return_value=(0, 0))
+    )
+    monkeypatch.setattr("cogs.leveling.database.set_user_xp_and_level", AsyncMock())
+    monkeypatch.setattr("cogs.leveling.database.increment_daily_xp", AsyncMock())
+
+    cog = Leveling(bot)
+    cog.guild_cooldowns[guild.id] = 60  # 60s cooldown
+
+    # first call awards XP
+    r1 = await cog._process_xp_gain(msg)
+    assert r1 is not None
+
+    # second call immediately should be skipped
+    r2 = await cog._process_xp_gain(msg)  # <- you weren’t awaiting this
+    assert r2 is None

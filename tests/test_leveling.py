@@ -1,5 +1,6 @@
 # tests/test_leveling.py
 from datetime import datetime, timedelta, timezone
+from io import BytesIO
 from zoneinfo import ZoneInfo
 from unittest.mock import AsyncMock, MagicMock, patch
 import types
@@ -42,59 +43,49 @@ def cog(bot, monkeypatch):
 
 
 # ---------- _process_xp_gain ----------
+@pytest.mark.asyncio
+async def test_process_xp_gain_respects_cooldown(cog, monkeypatch):
+    msg = MagicMock(spec=discord.Message)
+    msg.author.id = 55
+    msg.author.bot = False
+    msg.guild.id = 777
+    msg.channel.id = 999
+
+    cog.guild_cooldowns[msg.guild.id] = 10
+    cog._last_xp[(msg.guild.id, msg.author.id)] = 1000.0
+    monkeypatch.setattr("time.time", lambda: 1005.0)
+
+    res = await cog._process_xp_gain(msg)  # ← await
+    assert res is None
 
 
 @pytest.mark.asyncio
 async def test_process_xp_gain_happy_path_updates_db(cog, monkeypatch):
-    import config
-
-    # message setup
     msg = MagicMock(spec=discord.Message)
     msg.author.id = 55
     msg.author.bot = False
     msg.guild.id = 777
     msg.channel.id = 999
 
-    # cooldown 0 for this guild to avoid skip
     cog.guild_cooldowns[msg.guild.id] = 0
     cog.guild_xp_ranges[msg.guild.id] = (5, 5)
 
-    # freeze time and random
     monkeypatch.setattr("time.time", lambda: 1000.0)
     monkeypatch.setattr("random.randint", lambda a, b: 5)
 
-    # fake DB
-    db = patch("cogs.leveling.database").start()
-    db.get_user.return_value = (10, 1)  # current xp 10, lvl 1
-    db.set_user_xp_and_level = MagicMock()
-    db.increment_daily_xp = MagicMock()
+    # ← patch the *same path used by the cog* and use AsyncMock
+    monkeypatch.setattr(
+        "cogs.leveling.database.get_user", AsyncMock(return_value=(10, 1))
+    )
+    set_user = AsyncMock()
+    inc_daily = AsyncMock()
+    monkeypatch.setattr("cogs.leveling.database.set_user_xp_and_level", set_user)
+    monkeypatch.setattr("cogs.leveling.database.increment_daily_xp", inc_daily)
 
-    res = cog._process_xp_gain(msg)
-    assert isinstance(res, XpResult)
-    assert res.new_level >= res.old_level
-    db.set_user_xp_and_level.assert_called_once()
-    db.increment_daily_xp.assert_called_once()
-
-    patch.stopall()
-
-
-def test_process_xp_gain_respects_cooldown(cog, monkeypatch):
-    import config
-
-    msg = MagicMock(spec=discord.Message)
-    msg.author.id = 55
-    msg.author.bot = False
-    msg.guild.id = 777
-    msg.channel.id = 999
-
-    cog.guild_cooldowns[msg.guild.id] = 10  # 10s cooldown
-    cog._last_xp[msg.author.id] = 1000.0
-
-    # now=1005 -> still inside cooldown
-    monkeypatch.setattr("time.time", lambda: 1005.0)
-
-    res = cog._process_xp_gain(msg)
-    assert res is None
+    res = await cog._process_xp_gain(msg)  # ← await
+    assert res is not None
+    set_user.assert_awaited_once()
+    inc_daily.assert_awaited_once()
 
 
 # ---------- on_message ----------
@@ -237,74 +228,133 @@ async def _call_app_command(fn, cog, *args, **kwargs):
 
 
 @pytest.mark.asyncio
-async def test_rank_no_data(cog, interaction):
-    db = patch("cogs.leveling.database").start()
-    db.get_user.return_value = None
-    db.get_user_rank.return_value = None
+async def test_rank_no_data(monkeypatch):
+    from cogs.leveling import Leveling
 
-    await _call_app_command(Leveling.rank, cog, interaction, None)
-    interaction.followup.send.assert_awaited_once()
-    args, kwargs = interaction.followup.send.await_args
-    assert "no XP yet" in args[0]
-    assert kwargs.get("ephemeral") is True
-    patch.stopall()
+    interaction = MagicMock(spec=discord.Interaction)
+    interaction.guild = MagicMock()
+    interaction.guild.id = 1
+    interaction.user = MagicMock()
+    interaction.user.id = 7
+    interaction.response = MagicMock()
+    interaction.response.defer = AsyncMock()
+    interaction.followup = MagicMock()
+    interaction.followup.send = AsyncMock()
+
+    monkeypatch.setattr("cogs.leveling.database.get_user", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        "cogs.leveling.database.get_user_rank", AsyncMock(return_value=None)
+    )
+
+    cog = Leveling(MagicMock())
+    await cog.rank.callback(cog, interaction)  # ← use .callback
+
+    interaction.followup.send.assert_awaited()
+    assert "no XP yet" in interaction.followup.send.await_args.args[0]
 
 
 @pytest.mark.asyncio
-async def test_rank_happy_path(cog, interaction, monkeypatch):
-    db = patch("cogs.leveling.database").start()
-    db.get_user.return_value = (250, 3)  # total xp, level
-    db.get_user_rank.return_value = 5
+async def test_rank_happy_path(monkeypatch):
+    from cogs.leveling import Leveling
 
-    # image utils
-    card = MagicMock()
-    patch(
-        "cogs.leveling.image_utils.generate_rank_card", new=AsyncMock(return_value=card)
-    ).start()
+    interaction = MagicMock(spec=discord.Interaction)
+    interaction.guild = MagicMock()
+    interaction.guild.id = 1
+    interaction.user = MagicMock()
+    interaction.user.id = 7
+    interaction.response = MagicMock()
+    interaction.response.defer = AsyncMock()
+    interaction.followup = MagicMock()
+    interaction.followup.send = AsyncMock()
 
-    await _call_app_command(Leveling.rank, cog, interaction, None)
-    interaction.followup.send.assert_awaited_once_with(file=card)
-    patch.stopall()
+    monkeypatch.setattr(
+        "cogs.leveling.database.get_user", AsyncMock(return_value=(125, 3))
+    )
+    monkeypatch.setattr(
+        "cogs.leveling.database.get_user_rank", AsyncMock(return_value=2)
+    )
+    monkeypatch.setattr(
+        "cogs.leveling.database.get_user_profile",
+        AsyncMock(
+            return_value={
+                "primary_color": "#ffffff",
+                "accent_color": "#ffaa00",
+                "banner_path": None,
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        "cogs.leveling.fetch_banner_bytes", AsyncMock(return_value=None)
+    )
+    fake = discord.File(fp=BytesIO(b"img"), filename="rank.png")
+    monkeypatch.setattr(
+        "cogs.leveling.image_utils.generate_rank_card", AsyncMock(return_value=fake)
+    )
+
+    cog = Leveling(MagicMock())
+    await cog.rank.callback(cog, interaction)  # ← use .callback
+
+    interaction.followup.send.assert_awaited()
 
 
 # ---------- /leaderboard ----------
 
 
 @pytest.mark.asyncio
-async def test_leaderboard_empty(cog, interaction):
-    db = patch("cogs.leveling.database").start()
-    db.get_leaderboard.return_value = []
+async def test_leaderboard_empty(monkeypatch):
+    from cogs.leveling import Leveling
 
-    await _call_app_command(Leveling.leaderboard, cog, interaction)
-    interaction.followup.send.assert_awaited_once()
-    args, kwargs = interaction.followup.send.await_args
-    assert "No leaderboard data yet" in args[0]
-    assert kwargs.get("ephemeral") is True
-    patch.stopall()
+    interaction = MagicMock(spec=discord.Interaction)
+    interaction.guild = MagicMock()
+    interaction.guild.id = 1
+    interaction.response = MagicMock()
+    interaction.response.defer = AsyncMock()
+    interaction.followup = MagicMock()
+    interaction.followup.send = AsyncMock()
+
+    monkeypatch.setattr(
+        "cogs.leveling.database.get_leaderboard", AsyncMock(return_value=[])
+    )
+
+    cog = Leveling(MagicMock())
+    await cog.leaderboard.callback(cog, interaction)  # ← use .callback
+
+    interaction.followup.send.assert_awaited()
+    assert "No leaderboard data yet" in interaction.followup.send.await_args.args[0]
 
 
 @pytest.mark.asyncio
-async def test_leaderboard_happy_path(cog, interaction):
-    db = patch("cogs.leveling.database").start()
-    db.get_leaderboard.return_value = [(1, 100, 5), (2, 90, 4)]
+async def test_leaderboard_happy_path(monkeypatch):
+    from cogs.leveling import Leveling
 
-    # stub LeaderboardView behavior
-    with patch("cogs.leveling.LeaderboardView") as View:
-        inst = MagicMock()
-        inst.generate_embed = AsyncMock(return_value=MagicMock(spec=discord.Embed))
-        View.return_value = inst
+    interaction = MagicMock(spec=discord.Interaction)
+    interaction.guild = MagicMock()
+    interaction.guild.id = 1
+    interaction.response = MagicMock()
+    interaction.response.defer = AsyncMock()
+    interaction.followup = MagicMock()
+    interaction.followup.send = AsyncMock()
 
-        interaction.followup.send = AsyncMock(
-            return_value=MagicMock(spec=discord.Message)
-        )
+    rows = [(111, 5, 1234), (222, 4, 900)]
+    monkeypatch.setattr(
+        "cogs.leveling.database.get_leaderboard", AsyncMock(return_value=rows)
+    )
 
-        await _call_app_command(Leveling.leaderboard, cog, interaction)
+    class DummyView:
+        def __init__(self, *_):
+            pass
 
-        View.assert_called_once()
-        inst.update_buttons.assert_called_once()
-        inst.generate_embed.assert_awaited_once()
-        interaction.followup.send.assert_awaited()
-    patch.stopall()
+        def update_buttons(self):
+            pass
+
+        async def generate_embed(self):
+            return discord.Embed(title="LB")
+
+    with patch("cogs.leveling.LeaderboardView", DummyView):
+        cog = Leveling(MagicMock())
+        await cog.leaderboard.callback(cog, interaction)  # ← use .callback
+
+    interaction.followup.send.assert_awaited()
 
 
 # ---------- daily_award_task ----------

@@ -15,7 +15,7 @@ class Events(commands.Cog, name="Events"):
 
     @commands.Cog.listener()
     async def on_ready(self):
-        all_settings = database.get_all_channel_settings()
+        all_settings = await database.get_all_channel_settings()
         for guild_id, settings in all_settings.items():
             if settings and settings.get("welcome"):
                 self.welcome_channels[guild_id] = settings["welcome"]

@@ -6,6 +6,7 @@ import discord
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageChops, ImageOps
 
 import config
+from helpers.level_utils import RankCardData
 
 #
 # --- Helpers ---
@@ -357,18 +358,7 @@ async def generate_levelup_banner(user: discord.User, new_role: str) -> discord.
 
 
 # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches,too-many-statements
-async def generate_rank_card(
-    member: discord.Member,
-    level: int,
-    rank: int,
-    current_xp: int,
-    required_xp: int,
-    total_xp: int,
-    *,
-    primary_color: Optional[str] = None,  # NEW: '#RRGGBB'
-    accent_color: Optional[str] = None,  # NEW: '#RRGGBB'
-    banner_bytes: Optional[bytes] = None,
-) -> discord.File:
+async def generate_rank_card(data: RankCardData) -> discord.File:
     """
     Generates a rank card. Supports optional custom banner background and theming via hex colors.
     - primary_color : affects large headings / totals (default white)
@@ -378,14 +368,16 @@ async def generate_rank_card(
     # ---- THEME COLORS (with graceful fallbacks) ----
     white = (255, 255, 255)
     black = (0, 0, 0)
-    default_accent = (248, 184, 48)  # your yellow
-    prim_rgb = _hex_to_rgb(primary_color, white)
-    acc_rgb = _hex_to_rgb(accent_color, default_accent)
+    default_accent = (248, 184, 48)
+
+    # Access attributes from the data object now
+    prim_rgb = _hex_to_rgb(data.primary_color, white)
+    acc_rgb = _hex_to_rgb(data.accent_color, default_accent)
 
     # ---- BACKGROUND ----
     try:
-        if banner_bytes:
-            bg = Image.open(BytesIO(banner_bytes)).convert("RGBA")
+        if data.banner_bytes:
+            bg = Image.open(BytesIO(data.banner_bytes)).convert("RGBA")
             bg = ImageOps.fit(
                 bg,
                 (config.CARD_WIDTH, config.CARD_HEIGHT),
@@ -415,9 +407,9 @@ async def generate_rank_card(
 
     # --- Progress math ---
     progress_percent = max(
-        0.0, min(1.0, current_xp / required_xp if required_xp > 0 else 0)
+        0.0, min(1.0, data.current_xp / data.required_xp if data.required_xp > 0 else 0)
     )
-    remaining_xp = max(0, required_xp - current_xp)
+    remaining_xp = max(0, data.required_xp - data.current_xp)
 
     # --- Fonts ---
     font_user = _load_font(64)
@@ -427,41 +419,40 @@ async def generate_rank_card(
     font_total_xp = _load_font(64)
     font_xp = _load_font(24)
 
-    # --- Rank gap calc ---
-    if rank is not None:
-        if rank < 10:
+    if data.rank is not None:
+        if data.rank < 10:
             rank_text_gap = 325
-        elif rank < 100:
+        elif data.rank < 100:
             rank_text_gap = 345
-        elif rank < 1000:
+        elif data.rank < 1000:
             rank_text_gap = 365
         else:
             rank_text_gap = 325
     else:
-        rank = "unknown"
         rank_text_gap = 365
 
     # --- Level gap calc ---
-    if level is not None:
-        if level < 10:
+    if data.level is not None:
+        if data.level < 10:
             level_text_gap = 0
-        elif level < 100:
+        elif data.level < 100:
             level_text_gap = 50
-        elif level < 1000:
+        elif data.level < 1000:
             level_text_gap = 100
         else:
             level_text_gap = 0
     else:
-        level = "unknown"
         level_text_gap = 0
 
     # --- Avatar ---
     avatar_size = 300
-    if member.avatar:
-        asset = member.avatar.replace(size=128)
-        data = await asset.read()
+    if data.member.avatar:
+        asset = data.member.avatar.replace(size=128)
+        avatar_bytes = await asset.read()  # avoid shadowing `data`
         av = (
-            Image.open(BytesIO(data)).convert("RGBA").resize((avatar_size, avatar_size))
+            Image.open(BytesIO(avatar_bytes))
+            .convert("RGBA")
+            .resize((avatar_size, avatar_size))
         )
         mask = Image.new("L", (avatar_size, avatar_size), 0)
         mdraw = ImageDraw.Draw(mask)
@@ -476,7 +467,7 @@ async def generate_rank_card(
     draw_text(
         draw,
         position=(375, 285),
-        text=member.display_name,
+        text=data.member.display_name,
         font=font_user,
         fill_color=prim_rgb,
         anchor="lb",
@@ -486,7 +477,7 @@ async def generate_rank_card(
     draw_text(
         draw,
         position=(config.CARD_WIDTH - (50 + level_text_gap) - rank_text_gap, 72.5),
-        text=f"RANK #{rank}",
+        text=f"RANK #{data.rank}" if data.rank is not None else "RANK ?",
         font=font_rank,
         fill_color=acc_rgb,
         anchor="rt",
@@ -496,7 +487,7 @@ async def generate_rank_card(
     draw_text(
         draw,
         position=(config.CARD_WIDTH - 50, 50),
-        text=f"LEVEL {level}",
+        text=f"LEVEL {data.level}" if data.level is not None else "LEVEL ?",
         font=font_level,
         fill_color=prim_rgb,
         anchor="rt",
@@ -516,7 +507,7 @@ async def generate_rank_card(
     draw_text(
         draw,
         position=(config.CARD_WIDTH - 50, 275),
-        text=f"{total_xp} XP",
+        text=f"{data.total_xp} XP",
         font=font_total_xp,
         fill_color=prim_rgb,
         anchor="rb",
@@ -544,7 +535,7 @@ async def generate_rank_card(
         )
 
     # XP Text (primary with outline)
-    xp_text = f"{current_xp} / {required_xp} XP"
+    xp_text = f"{data.current_xp} / {data.required_xp} XP"
     text_bbox = draw.textbbox((0, 0), xp_text, font=font_xp)
     text_x = bar_x + (bar_width - (text_bbox[2] - text_bbox[0])) / 2
     text_y = bar_y + (bar_height - (text_bbox[3] - text_bbox[1])) / 2
