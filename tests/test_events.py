@@ -62,6 +62,17 @@ def member_factory(fake_guild):
 
 @pytest.mark.asyncio
 async def test_on_ready_loads_welcome_channels(cog, mocker):
+    mock_db = mocker.patch(
+        "cogs.events.database.get_all_channel_settings",
+        new=AsyncMock(return_value={111: {"welcome": 222}, 333: {"welcome": 444}}),
+    )
+    await cog.on_ready()
+    assert cog.welcome_channels == {111: 222, 333: 444}
+    mock_db.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_on_ready_loads_welcome_channels(cog, mocker):
     mock_db = mocker.patch("cogs.events.database.get_all_channel_settings")
     mock_db.return_value = {111: {"welcome": 222}, 333: {"welcome": 444}}
     await cog.on_ready()
@@ -121,13 +132,13 @@ async def test_on_member_join_image_utils_error_fallback_text(
     cog, member_factory, fake_guild, fake_channel, mocker
 ):
     mocker.patch.object(config, "GUILD_ID", fake_guild.id)
+    mocker.patch.object(config, "DEFAULT_WELCOME_CHANNEL_ID", fake_channel.id)
     with patch(
         "cogs.events.image_utils.make_multiline_glow", side_effect=RuntimeError("boom")
     ):
         m = member_factory(guild=fake_guild)
         await cog.on_member_join(m)
-    # We attempted a fallback send; if bot lacks perms, it will be caught below in next test.
-    assert fake_channel.send.await_count >= 1
+    assert fake_channel.send.await_count >= 1  # fallback attempted
 
 
 @pytest.mark.asyncio
@@ -135,8 +146,8 @@ async def test_on_member_join_fallback_forbidden_is_caught(
     cog, member_factory, fake_guild, fake_channel, mocker
 ):
     mocker.patch.object(config, "GUILD_ID", fake_guild.id)
-    # First attempt succeeds in make_multiline_glow, but channel.send will raise Forbidden for fallback branch
-    # Simulate error path by making image function fail, then channel.send raise Forbidden on fallback send
+    mocker.patch.object(config, "DEFAULT_WELCOME_CHANNEL_ID", fake_channel.id)
+
     with patch(
         "cogs.events.image_utils.make_multiline_glow", side_effect=Exception("boom")
     ):
@@ -144,12 +155,10 @@ async def test_on_member_join_fallback_forbidden_is_caught(
         async def raise_forbidden(*args, **kwargs):
             raise discord.errors.Forbidden(MagicMock(), "no perms")
 
-        fake_channel.send.side_effect = [
-            raise_forbidden
-        ]  # first call from try fails? we force fallback only
+        fake_channel.send.side_effect = [raise_forbidden]
         m = member_factory(guild=fake_guild)
         await cog.on_member_join(m)
-    # No unhandled exceptions = pass
+    # no exception = pass
 
 
 # ---------- on_member_update
@@ -185,19 +194,20 @@ async def test_on_member_update_channel_not_found(
     cog, fake_guild, mocker, member_factory
 ):
     role_id = 1234
-    ch_id = 999999  # won’t be found
+    ch_id = 999999
     mocker.patch.object(config, "ROLE_ALERTS", [(role_id, ch_id, "msg {member}")])
+
+    # Override the fixture’s default so this returns None
+    fake_guild.get_channel.return_value = None
 
     role = MagicMock()
     role.id = role_id
-
     before = member_factory(guild=fake_guild)
     before.roles = []
     after = member_factory(guild=fake_guild)
     after.roles = [role]
 
-    # guild.get_channel will return None by default for unknown id
-    await cog.on_member_update(before, after)  # just shouldn’t crash
+    await cog.on_member_update(before, after)  # should not crash
 
 
 @pytest.mark.asyncio

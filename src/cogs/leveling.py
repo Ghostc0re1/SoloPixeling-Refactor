@@ -443,7 +443,7 @@ class Leveling(commands.Cog):
         except Exception as e:
             logging.exception("rank-set-colors failed")
             await interaction.followup.send(
-                ("Failed to save colors. Please try again. %s", e), ephemeral=True
+                f"Failed to save colors. Please try again. Error: {e}", ephemeral=True
             )
 
     @app_commands.command(

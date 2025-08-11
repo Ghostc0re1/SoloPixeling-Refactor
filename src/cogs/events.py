@@ -76,13 +76,12 @@ class Events(commands.Cog, name="Events"):
             )
             log.info("Sent welcome image for %s", member.display_name)
 
-        except Exception as e:
-            log.error(
-                ("Failed to generate welcome image for %s: %s", member.display_name, e),
-                exc_info=True,
+        except Exception:
+            log.exception(
+                "Failed to generate welcome image for %s", member.display_name
             )
             try:
-                await channel.send("Welcome to the server, %s!", member.mention)
+                await channel.send(f"Welcome to the server, {member.mention}")
             except discord.errors.Forbidden:
                 log.error(
                     "Failed to send fallback welcome message in %s due to missing permissions.",
