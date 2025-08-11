@@ -8,7 +8,7 @@ load_dotenv()
 # --- CONFIGURATION ---
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-SQLITE_DB_PATH = "./leveling.db"
+SQLITE_DB_PATH = "./src/data/leveling.db"
 
 # --- SCRIPT ---
 
