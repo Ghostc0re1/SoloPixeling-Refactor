@@ -1,6 +1,5 @@
 # src/cogs/giveaway.py
 
-import logging
 import random
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -9,14 +8,17 @@ import discord
 from discord.ext import commands, tasks
 from discord import app_commands
 
-from utility.giveaway_utils import parse_message_id, parse_utc_iso
-from helpers.giveaway_helper import fetch_member_safe
-from views.giveaway_view import GiveawayView
-
-from data import database as db
 import config
+from helpers.giveaway_helper import fetch_member_safe
+from helpers.logging_helper import add_throttle, get_logger
+from utility.giveaway_utils import parse_message_id, parse_utc_iso
+from views.giveaway_view import GiveawayView
+from data import database as db
 
-logger = logging.getLogger(__name__)
+
+logger = get_logger("giveaway")
+heartbeat = get_logger("giveaway.heartbeat")
+add_throttle(heartbeat, 900)
 
 
 class Giveaway(commands.Cog):
@@ -25,7 +27,11 @@ class Giveaway(commands.Cog):
         self.check_giveaways_loop.start()
 
     async def cog_unload(self):
-        self.check_giveaways_loop.cancel()
+        try:
+            if self.check_giveaways_loop.is_running():
+                self.check_giveaways_loop.cancel()
+        except Exception:
+            logger.exception("Failed to unload check_giveaways_loop")
 
     # --- Private Functions ---
     def _find_field_index(self, embed: discord.Embed, name_prefix: str) -> int | None:
@@ -39,16 +45,15 @@ class Giveaway(commands.Cog):
         self,
         g_data: dict,
         winners: list[discord.Member],
-        original_embed: discord.Embed = None,
+        original_embed: Optional[discord.Embed] = None,
         status: str | None = None,
     ) -> discord.Embed:
         """Builds the final 'Giveaway Ended' embed."""
         embed = original_embed if original_embed else discord.Embed()
         embed.title = "🎉 Giveaway Ended! 🎉"
         embed.color = discord.Color.red()
-        embed.description = None  # Clear "Click to enter" description
+        embed.description = None
 
-        # Clear old fields and add the ones we want
         embed.clear_fields()
         embed.add_field(name="Prize", value=g_data.get("prize", "—"), inline=True)
 
@@ -138,7 +143,9 @@ class Giveaway(commands.Cog):
         - Edit embed robustly (works even if original embed is gone)
         """
         try:
-            # 1) Guard against double-processing
+
+            ctx = {"gid": g["guild_id"], "cid": g["channel_id"], "mid": g["message_id"]}
+
             flipped = await db.end_giveaway(g["message_id"])
             if not flipped:
                 return
@@ -146,29 +153,17 @@ class Giveaway(commands.Cog):
             # 2) Find channel (cache -> fetch)
             channel = await self._get_message_channel(g["channel_id"])
             if channel is None:
-                logger.warning(
-                    "Giveaway %s: channel %s missing/forbidden",
-                    g["message_id"],
-                    g["channel_id"],
-                )
+                logger.warning("Channel missing/forbidden", extra=ctx)
                 return
 
             # 3) Fetch message
             try:
                 message = await channel.fetch_message(g["message_id"])
             except discord.NotFound:
-                logger.warning(
-                    "Giveaway %s: message not found",
-                    g["message_id"],
-                    extra={"gid": g["guild_id"], "cid": g["channel_id"]},
-                )
+                logger.warning("Message not found", extra=ctx)
                 return
             except discord.Forbidden:
-                logger.warning(
-                    "Giveaway %s: forbidden fetching message in channel %s",
-                    g["message_id"],
-                    g["channel_id"],
-                )
+                logger.warning("Forbidden fetching message", extra=ctx)
                 return
 
             # 4) Load entrants
@@ -207,12 +202,7 @@ class Giveaway(commands.Cog):
             # 7) skip users who left
             guild = self.bot.get_guild(g["guild_id"])
             if not guild:
-                logger.warning(
-                    "Giveaway %s: guild %s not found",
-                    g["message_id"],
-                    g["guild_id"],  # <-- Add the missing argument here
-                    extra={"gid": g["guild_id"], "cid": g["channel_id"]},
-                )
+                logger.warning("Guild not found", extra=ctx)
                 return
 
             entrants = await self._get_valid_entrants(g["guild_id"], entrant_ids)
@@ -224,9 +214,7 @@ class Giveaway(commands.Cog):
                         content="This giveaway has ended.", embed=final_embed, view=None
                     )
                 except Exception:
-                    logger.exception(
-                        "Failed to edit giveaway message %s", g.get("message_id")
-                    )
+                    logger.exception("Failed to edit giveaway message", extra=ctx)
                 return
 
             # 8) Pick winners
@@ -242,9 +230,7 @@ class Giveaway(commands.Cog):
                     content="This giveaway has ended.", embed=final_embed, view=None
                 )
             except Exception:
-                logger.exception(
-                    "Failed to edit giveaway message %s", g.get("message_id")
-                )
+                logger.exception("Failed to edit giveaway message", extra=ctx)
 
             if winners:
                 winner_mentions = ", ".join(w.mention for w in winners)
@@ -253,16 +239,10 @@ class Giveaway(commands.Cog):
                         f"Congratulations {winner_mentions}! You won the **{g['prize']}**!"
                     )
                 except Exception:
-                    logger.exception(
-                        "Failed to reply with winners for %s", g.get("message_id")
-                    )
+                    logger.exception("Failed to reply with winners", extra=ctx)
 
         except Exception:
-            logger.exception(
-                "process_ended_giveaway failed for %s",
-                g["message_id"],
-                extra={"gid": g["guild_id"], "cid": g["channel_id"]},
-            )
+            logger.exception("process_ended_giveaway failed", extra=ctx)
 
     # --- GIVEAWAY START COMMAND ---
     @app_commands.command(
@@ -323,6 +303,12 @@ class Giveaway(commands.Cog):
             giveaway_message = await interaction.channel.send(
                 embed=embed, view=GiveawayView()
             )
+            logger.info(
+                "Giveaway started: mid=%s ends=%s winners=%s",
+                giveaway_message.id,
+                end_time.isoformat(),
+                winners,
+            )
 
             await db.create_giveaway(
                 message=giveaway_message,
@@ -364,6 +350,7 @@ class Giveaway(commands.Cog):
     async def check_giveaways_loop(self):
         now = datetime.now(timezone.utc)
         due = await db.get_due_giveaways(now.isoformat())
+        heartbeat.debug("due=%d at %s", len(due), now.isoformat())
         for g in due:
             await self.process_ended_giveaway(g)
 

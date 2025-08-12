@@ -1,8 +1,7 @@
 import asyncio
-from datetime import datetime, timedelta, time as dt_time
-import logging
 import time
 import random
+from datetime import datetime, timedelta, time as dt_time
 from typing import Optional, Tuple
 from zoneinfo import ZoneInfo
 from PIL import Image, ImageOps
@@ -14,19 +13,26 @@ from discord import app_commands
 
 #
 import config
+from utility import image_utils
 from utility.level_utils import (
     RankCardData,
     xp_for_level,
     level_from_xp,
     XpResult,
 )
-from utility import image_utils
-from helpers.level_helper import fetch_banner_bytes
 from helpers import banner_helper
+from helpers.level_helper import fetch_banner_bytes
+from helpers.logging_helper import get_logger, add_throttle
 from data import database
 from views.leaderboard_view import LeaderboardView
 
-logger = logging.getLogger(__name__)
+
+log = get_logger("leveling")
+xp_logger = get_logger("leveling.xp")
+add_throttle(xp_logger, 60)
+
+heartbeat = get_logger("leveling.heartbeat")
+add_throttle(heartbeat, 300)
 
 
 class Leveling(commands.Cog):
@@ -42,8 +48,8 @@ class Leveling(commands.Cog):
         try:
             if self.daily_award_task.is_running():
                 self.daily_award_task.cancel()
-        except Exception as e:
-            logging.error("Failed to unload daily_award_task: %s", e)
+        except Exception:
+            log.exception("Failed to unload daily_award_task")
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -53,22 +59,22 @@ class Leveling(commands.Cog):
         try:
             self.guild_cooldowns = await database.get_all_cooldowns()
             self.guild_xp_ranges = await database.get_all_xp_ranges()
-            logger.info("Loaded XP ranges for %d guilds.", len(self.guild_xp_ranges))
+            log.info("Loaded XP ranges for %d guilds.", len(self.guild_xp_ranges))
             all_channel_settings = await database.get_all_channel_settings()
             for guild_id, settings in all_channel_settings.items():
                 if settings.get("levelup"):
                     self.guild_levelup_channels[guild_id] = settings["levelup"]
-            logger.info(
+            log.info(
                 "Loaded level-up channel settings for %d guilds.",
                 len(self.guild_levelup_channels),
             )
-            logger.info("Loaded cooldowns for %d guilds.", len(self.guild_cooldowns))
+            log.info("Loaded cooldowns for %d guilds.", len(self.guild_cooldowns))
 
             if not self._awards_started:
                 self.daily_award_task.start()
                 self._awards_started = True
-        except Exception as e:
-            logging.error("Failed to load leveling settings on_ready: %s", e)
+        except Exception:
+            log.exception("Failed to load leveling settings on_ready")
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -83,8 +89,8 @@ class Leveling(commands.Cog):
             res = await self._process_xp_gain(message)
             if res and res.leveled_up:
                 await self._announce_levelup(message, res.new_level)
-        except Exception as e:
-            logging.error("Error processing XP gain for message %s: %s", message.id, e)
+        except Exception:
+            log.exception("Error processing XP gain for message %s", message.id)
 
     # pylint: disable=too-many-locals
     async def _process_xp_gain(self, message: discord.Message) -> XpResult | None:
@@ -115,7 +121,7 @@ class Leveling(commands.Cog):
         await database.increment_daily_xp(user_id, guild_id, xp_gain)
 
         leveled_up = new_level > current_level
-        logging.debug(
+        xp_logger.debug(
             "XP processed: user=%s guild=%s gain=%s total=%s lvl=%s->%s",
             user_id,
             guild_id,
@@ -176,13 +182,11 @@ class Leveling(commands.Cog):
             )
             await message.author.add_roles(role, reason="Level up reward")
         except discord.Forbidden:
-            logging.warning(
+            log.warning(
                 "Missing permissions to announce level up in guild %s", message.guild.id
             )
-        except Exception as e:
-            logging.error(
-                "Failed to announce level up for %s: %s", message.author.id, e
-            )
+        except Exception:
+            log.exception("Failed to announce level up for %s", message.author.id)
 
     @app_commands.command(
         name="rank", description="Check your (or someone else's) rank & XP"
@@ -234,10 +238,10 @@ class Leveling(commands.Cog):
             image_file = await banner_helper.generate_rank_card(card)
             await interaction.followup.send(file=image_file)
 
-        except Exception as e:
-            logging.exception("Error in /rank command")
+        except Exception:
+            log.exception("Error in /rank command")
             await interaction.followup.send(
-                f"Could not generate rank card. Please try again later. Error: {e}",
+                "Could not generate rank card. Please try again later.",
                 ephemeral=True,
             )
 
@@ -260,8 +264,8 @@ class Leveling(commands.Cog):
 
             message = await interaction.followup.send(embed=embed, view=view)
             view.message = message
-        except Exception as e:
-            logging.error("Error in /leaderboard command: %s", e)
+        except Exception:
+            log.exception("Error in /leaderboard command:")
             await interaction.followup.send(
                 "Could not retrieve the leaderboard. Please try again later.",
                 ephemeral=True,
@@ -270,6 +274,7 @@ class Leveling(commands.Cog):
     @tasks.loop(time=dt_time(0, 0, tzinfo=ZoneInfo("America/New_York")))
     async def daily_award_task(self):
         eastern_now = datetime.now(ZoneInfo("America/New_York"))
+        heartbeat.debug("Running daily_award_task tick at %s", eastern_now.isoformat())
         yesterday = (eastern_now - timedelta(days=1)).strftime("%Y-%m-%d")
 
         for guild in self.bot.guilds:
@@ -303,16 +308,16 @@ class Leveling(commands.Cog):
             except discord.NotFound:
                 continue
             except discord.Forbidden:
-                logging.warning(
+                log.warning(
                     "Missing permissions for daily awards in guild %s", guild.id
                 )
-            except Exception as e:
-                logging.error("Error in daily_award_task for guild %s: %s", guild.id, e)
+            except Exception:
+                log.error("Error in daily_award_task for guild %s", guild.id)
 
         try:
             await database.reset_daily_xp(yesterday)
-        except Exception as e:
-            logging.error("Failed to reset daily XP for %s: %s", yesterday, e)
+        except Exception:
+            log.exception("Failed to reset daily XP for %s", yesterday)
 
     @daily_award_task.before_loop
     async def before_daily_award(self):
@@ -409,10 +414,10 @@ class Leveling(commands.Cog):
             await interaction.followup.send(
                 "✅ Banner updated! Use `/rank` to see it.", ephemeral=True
             )
-        except Exception as e:
-            logging.exception("rank-set-banner failed")
+        except Exception:
+            log.exception("rank-set-banner failed")
             await interaction.followup.send(
-                f"Failed to set banner. Please try again. {e}", ephemeral=True
+                "Failed to set banner. Please try again.", ephemeral=True
             )
 
     @app_commands.command(
@@ -428,10 +433,10 @@ class Leveling(commands.Cog):
                 "✅ Banner removed. Your rank card will use the default background.",
                 ephemeral=True,
             )
-        except Exception as e:
-            logging.exception("rank-remove-banner failed")
+        except Exception:
+            log.exception("rank-remove-banner failed")
             await interaction.followup.send(
-                f"Failed to remove banner. Please try again. {e}", ephemeral=True
+                "Failed to remove banner. Please try again.", ephemeral=True
             )
 
     @app_commands.command(
@@ -469,10 +474,10 @@ class Leveling(commands.Cog):
             await interaction.followup.send(
                 "✅ Colors saved! Use `/rank` to see them.", ephemeral=True
             )
-        except Exception as e:
-            logging.exception("rank-set-colors failed")
+        except Exception:
+            log.exception("rank-set-colors failed")
             await interaction.followup.send(
-                f"Failed to save colors. Please try again. Error: {e}", ephemeral=True
+                "Failed to save colors. Please try again.", ephemeral=True
             )
 
     @app_commands.command(
@@ -489,7 +494,7 @@ class Leveling(commands.Cog):
                 "✅ Colors reset to defaults.", ephemeral=True
             )
         except Exception:
-            logging.exception("rank-reset-colors failed")
+            log.exception("rank-reset-colors failed")
             await interaction.followup.send(
                 "Failed to reset colors. Please try again.", ephemeral=True
             )

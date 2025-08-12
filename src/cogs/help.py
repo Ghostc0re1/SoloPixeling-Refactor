@@ -1,8 +1,55 @@
-import logging
+import inspect
 import discord
 from discord.ext import commands
 from discord import app_commands
+from helpers.logging_helper import get_logger
 from views.help_view import HelpView
+
+log = get_logger("help")
+
+
+async def user_can_run(
+    cmd: app_commands.Command | app_commands.Group, interaction: discord.Interaction
+) -> bool:
+    # 1) DM vs Guild
+    if interaction.guild is None:
+        # If command disallows DMs, hide it
+        if hasattr(cmd, "dm_permission") and cmd.dm_permission is False:
+            return False
+    else:
+        # In a guild: enforce default member permissions if present
+        required = getattr(cmd, "default_permissions", None) or getattr(
+            cmd, "default_member_permissions", None
+        )
+        if required is not None:
+            req_bits = (
+                int(required.value) if hasattr(required, "value") else int(required)
+            )
+            if (interaction.user.guild_permissions.value & req_bits) != req_bits:
+                return False
+
+    # 2) NSFW
+    if getattr(cmd, "nsfw", False):
+        ch = interaction.channel
+        if not (hasattr(ch, "is_nsfw") and ch.is_nsfw()):
+            return False
+
+    # 3) Custom checks (@app_commands.checks.*)
+    for check in getattr(cmd, "checks", ()):
+        try:
+            res = check(interaction)
+            if inspect.isawaitable(res):
+                await res
+        except app_commands.CommandOnCooldown:
+            # Still show the command; user just can't use it right now
+            pass
+        except app_commands.CheckFailure:
+            return False
+        except Exception:
+            # If a check explodes, err on the side of hiding it
+            return False
+
+    return True
 
 
 class HelpCog(commands.Cog):
@@ -10,74 +57,95 @@ class HelpCog(commands.Cog):
         self.bot = bot
 
     @app_commands.command(
-        name="help", description="Shows a list of all available commands."
+        name="help", description="Shows a list of commands you can use here."
     )
     async def help(self, interaction: discord.Interaction):
-        # Defer the response to handle cases where command processing might be slow.
         await interaction.response.defer(ephemeral=True)
         try:
-            categorized_commands = {}
+            categorized: dict[str, list[str]] = {}
+
+            async def add_entry(category: str, text: str):
+                categorized.setdefault(category, []).append(text)
 
             for command in self.bot.tree.get_commands():
-                cog = None
+                # Handle groups by filtering each subcommand
                 if isinstance(command, app_commands.Group):
-                    # For a group, get the cog from its first subcommand, if it exists
-                    if command.commands:
-                        cog = command.commands[0].binding
+                    # First-level subcommands
+                    visible = []
+                    for sub in command.commands:
+                        if await user_can_run(sub, interaction):
+                            cat = (
+                                sub.binding.__class__.__name__.replace("Cog", "")
+                                if getattr(sub, "binding", None)
+                                else "General"
+                            )
+                            visible.append(
+                                (
+                                    cat,
+                                    f"`/{command.name} {sub.name}` - {sub.description or '…' }",
+                                )
+                            )
+                    # Optionally handle nested groups (group -> group -> command)
+                    for sub in command.commands:
+                        if isinstance(sub, app_commands.Group):
+                            for subsub in sub.commands:
+                                if await user_can_run(subsub, interaction):
+                                    cat = (
+                                        subsub.binding.__class__.__name__.replace(
+                                            "Cog", ""
+                                        )
+                                        if getattr(subsub, "binding", None)
+                                        else "General"
+                                    )
+                                    visible.append(
+                                        (
+                                            cat,
+                                            f"`/{command.name} {sub.name} {subsub.name}` - {subsub.description or '…'}",
+                                        )
+                                    )
+                    for cat, line in visible:
+                        await add_entry(cat, line)
                 else:
-                    # For a regular command, get the cog directly
-                    cog = command.binding
+                    # Regular command
+                    if await user_can_run(command, interaction):
+                        cat = (
+                            command.binding.__class__.__name__.replace("Cog", "")
+                            if getattr(command, "binding", None)
+                            else "General"
+                        )
+                        await add_entry(
+                            cat, f"`/{command.name}` - {command.description or '…'}"
+                        )
 
-                # Use the cog's name for the category, default to "General"
-                category = (
-                    cog.__class__.__name__.replace("Cog", "") if cog else "General"
+            if not categorized:
+                return await interaction.followup.send(
+                    "No commands available to you here.", ephemeral=True
                 )
 
-                if category not in categorized_commands:
-                    categorized_commands[category] = []
-
-                if isinstance(command, app_commands.Group):
-                    sub_commands = [
-                        f"`/{command.name} {sub.name}` - {sub.description}"
-                        for sub in command.commands
-                    ]
-                    categorized_commands[category].extend(sub_commands)
-                else:
-                    categorized_commands[category].append(
-                        f"`/{command.name}` - {command.description}"
-                    )
-
-            if not categorized_commands:
-                await interaction.followup.send("No commands found.", ephemeral=True)
-                return
-
+            # Build paginated embeds
             embeds = []
-            # Sort categories alphabetically for a consistent order
-            for category, commands_list in sorted(categorized_commands.items()):
+            for category, lines in sorted(categorized.items()):
                 embed = discord.Embed(
-                    title=f"**{category} Commands**",
-                    description="\n".join(commands_list),
-                    color=discord.Color.blue(),
+                    title=f"{category} Commands",
+                    description="\n".join(lines),
+                    color=discord.Color.blurple(),
                 )
                 embeds.append(embed)
 
-            # Add page numbers to the footer of each embed
-            for i, embed in enumerate(embeds):
-                embed.set_footer(text=f"Page {i + 1}/{len(embeds)}")
+            for i, e in enumerate(embeds, start=1):
+                e.set_footer(text=f"Page {i}/{len(embeds)}")
 
             view = HelpView(embeds)
             view.update_buttons()
-
-            message = await interaction.followup.send(
+            msg = await interaction.followup.send(
                 embed=embeds[0], view=view, ephemeral=True
             )
-            view.message = message
+            view.message = msg
 
-        except Exception as e:
-            logging.error("Error in /help command: %s", e)
+        except Exception:
+            log.exception("Error in /help")
             await interaction.followup.send(
-                "An unexpected error occurred while trying to show the help menu.",
-                ephemeral=True,
+                "An unexpected error occurred while showing help.", ephemeral=True
             )
 
 
