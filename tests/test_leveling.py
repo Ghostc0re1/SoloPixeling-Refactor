@@ -8,7 +8,7 @@ import pytest
 import discord
 
 from cogs.leveling import Leveling
-from helpers.level_utils import XpResult
+from utility.level_utils import XpResult
 
 
 @pytest.fixture
@@ -288,7 +288,7 @@ async def test_rank_happy_path(monkeypatch):
     )
     fake = discord.File(fp=BytesIO(b"img"), filename="rank.png")
     monkeypatch.setattr(
-        "cogs.leveling.image_utils.generate_rank_card", AsyncMock(return_value=fake)
+        "cogs.leveling.banner_helper.generate_rank_card", AsyncMock(return_value=fake)
     )
 
     cog = Leveling(MagicMock())

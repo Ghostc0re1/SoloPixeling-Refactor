@@ -8,7 +8,7 @@ from discord import app_commands
 #
 import config
 from data import database
-from helpers.level_utils import level_from_xp, build_xp_status
+from utility.level_utils import level_from_xp, build_xp_status
 from views.purge_confirmation_view import PurgeConfirmationView
 
 

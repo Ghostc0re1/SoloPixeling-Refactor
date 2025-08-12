@@ -3,7 +3,7 @@ import discord
 from discord.ext import commands
 import config
 from data import database
-from helpers import image_utils
+from utility import image_utils
 
 log = logging.getLogger(__name__)
 

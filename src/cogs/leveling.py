@@ -1,10 +1,10 @@
+import asyncio
 from datetime import datetime, timedelta, time as dt_time
 import logging
 import time
 import random
-from typing import Optional
+from typing import Optional, Tuple
 from zoneinfo import ZoneInfo
-from io import BytesIO
 from PIL import Image, ImageOps
 
 #
@@ -14,14 +14,15 @@ from discord import app_commands
 
 #
 import config
-from helpers.level_utils import (
+from utility.level_utils import (
     RankCardData,
     xp_for_level,
     level_from_xp,
-    fetch_banner_bytes,
     XpResult,
 )
-from helpers import image_utils
+from utility import image_utils
+from helpers.level_helper import fetch_banner_bytes
+from helpers import banner_helper
 from data import database
 from views.leaderboard_view import LeaderboardView
 
@@ -230,7 +231,7 @@ class Leveling(commands.Cog):
             )
 
             # assumes you updated the function signature to accept the dataclass
-            image_file = await image_utils.generate_rank_card(card)
+            image_file = await banner_helper.generate_rank_card(card)
             await interaction.followup.send(file=image_file)
 
         except Exception as e:
@@ -325,31 +326,50 @@ class Leveling(commands.Cog):
             and all(c in "0123456789abcdefABCDEF" for c in s[1:])
         )
 
+    # pylint: disable=too-many-arguments
     def _process_banner_bytes(
-        self, raw: bytes, prefer_webp: bool = True
+        self,
+        raw: bytes,
+        prefer_webp: bool = True,
+        *,
+        target_size: Tuple[int, int] = (config.CARD_WIDTH, config.CARD_HEIGHT),
+        centering: Tuple[float, float] = (0.5, 0.5),  # 0..1
+        darken_overlay_rgba: tuple[int, int, int, int] | None = None,
+        jpeg_bg: tuple[int, int, int] = (0, 0, 0),
     ) -> tuple[bytes, str, str]:
-        """Return (processed_bytes, mime, ext) scaled to 1600x400, letterboxed center."""
-        im = Image.open(BytesIO(raw)).convert("RGBA")
-        im = ImageOps.contain(
-            im, (config.CARD_WIDTH, config.CARD_HEIGHT), Image.Resampling.LANCZOS
-        )
-        canvas = Image.new(
-            "RGBA", (config.CARD_WIDTH, config.CARD_HEIGHT), (0, 0, 0, 0)
-        )
-        x = (config.CARD_WIDTH - im.width) // 2
-        y = (config.CARD_HEIGHT - im.height) // 2
-        canvas.paste(im, (x, y), im)
+        """
+        Return (processed_bytes, mime, ext) cropped to exactly `target_size` via cover scaling.
+        """
+        # 1) Open safely & normalize
+        img = image_utils.safe_open(raw).convert("RGBA")
 
-        out = BytesIO()
-        if prefer_webp:
-            canvas.convert("RGB").save(out, format="WEBP", quality=85, method=6)
-            return out.getvalue(), "image/webp", "webp"
-
-        # This code only runs if the 'if' block didn't execute and return.
-        canvas.convert("RGB").save(
-            out, format="JPEG", quality=85, optimize=True, progressive=True
+        # 2) Cover scale + crop to the banner box
+        img = ImageOps.fit(
+            img,
+            target_size,
+            method=Image.Resampling.LANCZOS,
+            centering=centering,
         )
-        return out.getvalue(), "image/jpeg", "jpg"
+
+        # 3) Optional overlay to help white text pop
+        if darken_overlay_rgba:
+            overlay = Image.new("RGBA", img.size, darken_overlay_rgba)
+            img = Image.alpha_composite(img, overlay)
+
+        # 4) Pick format & encode
+        has_alpha = img.mode == "RGBA"
+        ext, mime = image_utils.sniff_ext_and_mime(
+            img.format or "", has_alpha, prefer_webp=prefer_webp
+        )
+
+        if ext == "webp":
+            out_bytes = image_utils.encode_webp(img, lossless=has_alpha, quality=85)
+            return out_bytes, mime, ext
+
+        # JPEG path: flatten first
+        jpg_img = image_utils.flatten_rgba_to_rgb(img, bg=jpeg_bg)
+        out_bytes = image_utils.encode_jpeg(jpg_img, quality=85)
+        return out_bytes, mime, ext
 
     @app_commands.command(
         name="rank-set-banner",
@@ -373,7 +393,16 @@ class Leveling(commands.Cog):
                 )
 
             raw = await image.read()
-            processed, mime, ext = self._process_banner_bytes(raw, prefer_webp=True)
+
+            processed, mime, ext = await asyncio.to_thread(
+                self._process_banner_bytes,
+                raw,
+                True,  # prefer_webp
+                target_size=(config.CARD_WIDTH, config.CARD_HEIGHT),
+                centering=(0.5, 0.5),
+                darken_overlay_rgba=(0, 0, 0, 96),
+                jpeg_bg=(0, 0, 0),
+            )
             await database.set_rank_banner(
                 interaction.user.id, interaction.guild.id, processed, mime, ext
             )

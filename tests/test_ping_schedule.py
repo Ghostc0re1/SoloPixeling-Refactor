@@ -1,5 +1,5 @@
 import pytest
-from helpers.schedule_utils import PingSchedule
+from utility.schedule_utils import PingSchedule
 
 
 def test_valid_schedule_ok():

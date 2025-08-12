@@ -1,45 +1,12 @@
 # level_utils.py
 from dataclasses import dataclass
-import logging
-import time
 from typing import Optional
 import os
 import discord
 from dotenv import load_dotenv
 
-import aiohttp
-
 load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
-
-_banner_cache: dict[str, tuple[float, bytes]] = {}
-_BANNER_TTL = 600.0  # seconds
-
-
-def build_public_storage_url(bucket: str, path: str) -> str:
-    base = SUPABASE_URL.rstrip("/")
-    return f"{base}/storage/v1/object/public/{bucket}/{path.lstrip('/')}"
-
-
-async def fetch_banner_bytes(banner_path: str) -> Optional[bytes]:
-    if not banner_path:
-        return None
-
-    now = time.time()
-    cached = _banner_cache.get(banner_path)
-    if cached and now - cached[0] < _BANNER_TTL:
-        return cached[1]
-
-    url = build_public_storage_url("rank-banners", banner_path)
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url) as resp:
-            if resp.status == 200:
-                data = await resp.read()
-                _banner_cache[banner_path] = (now, data)
-                return data
-
-    logging.warning("Banner fetch failed: %s", url)
-    return None
 
 
 @dataclass
@@ -72,6 +39,11 @@ class RankCardData:
     primary_color: Optional[str] = None
     accent_color: Optional[str] = None
     banner_bytes: Optional[bytes] = None
+
+
+def build_public_storage_url(bucket: str, path: str) -> str:
+    base = SUPABASE_URL.rstrip("/")
+    return f"{base}/storage/v1/object/public/{bucket}/{path.lstrip('/')}"
 
 
 def xp_for_level(level: int) -> int:

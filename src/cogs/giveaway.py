@@ -9,7 +9,8 @@ import discord
 from discord.ext import commands, tasks
 from discord import app_commands
 
-from helpers.giveaway_utils import fetch_member_safe, parse_message_id, parse_utc_iso
+from utility.giveaway_utils import parse_message_id, parse_utc_iso
+from helpers.giveaway_helper import fetch_member_safe
 from views.giveaway_view import GiveawayView
 
 from data import database as db
@@ -24,7 +25,6 @@ class Giveaway(commands.Cog):
         self.check_giveaways_loop.start()
 
     async def cog_unload(self):
-        # Gracefully stop the task when the cog is unloaded.
         self.check_giveaways_loop.cancel()
 
     # --- Private Functions ---
@@ -34,6 +34,68 @@ class Giveaway(commands.Cog):
             if f.name.lower().startswith(name_prefix.lower()):
                 return i
         return None
+
+    def _build_ended_embed(
+        self,
+        g_data: dict,
+        winners: list[discord.Member],
+        original_embed: discord.Embed = None,
+        status: str | None = None,
+    ) -> discord.Embed:
+        """Builds the final 'Giveaway Ended' embed."""
+        embed = original_embed if original_embed else discord.Embed()
+        embed.title = "🎉 Giveaway Ended! 🎉"
+        embed.color = discord.Color.red()
+        embed.description = None  # Clear "Click to enter" description
+
+        # Clear old fields and add the ones we want
+        embed.clear_fields()
+        embed.add_field(name="Prize", value=g_data.get("prize", "—"), inline=True)
+
+        if not winners:
+            winner_mentions = "No one! Maybe they all left?"
+        else:
+            winner_mentions = ", ".join(w.mention for w in winners)
+
+        embed.add_field(name="Winners", value=winner_mentions, inline=False)
+        if status:
+            embed.add_field(name="Status", value=status, inline=False)
+        return embed
+
+    def _weights_for(self, entrants: list[discord.Member]) -> list[int]:
+        weights = []
+        for member in entrants:
+            weight = config.DEFAULT_WEIGHT
+            if member.roles:
+                weight = max(
+                    [weight] + [config.ROLE_WEIGHTS.get(r.id, 0) for r in member.roles]
+                )
+            weights.append(weight)
+        return weights
+
+    def _pick_winners(
+        self, entrants: list[discord.Member], weights: list[int], k: int
+    ) -> list[discord.Member]:
+        k = min(k, len(entrants))
+        if k <= 0:
+            return []
+
+        pool = list(zip(entrants, weights))
+        total = sum(w for _, w in pool)
+        winners: list[discord.Member] = []
+        for _ in range(k):
+            if total <= 0:
+                break
+            r = random.uniform(0, total)
+            upto = 0.0
+            for i, (m, w) in enumerate(pool):
+                upto += w
+                if upto >= r:
+                    winners.append(m)
+                    pool.pop(i)
+                    total -= w
+                    break
+        return winners
 
     async def _get_message_channel(
         self, channel_id: int
@@ -65,140 +127,6 @@ class Giveaway(commands.Cog):
             if m := await fetch_member_safe(guild, uid):
                 entrants.append(m)
         return entrants
-
-    def _build_ended_embed(
-        self,
-        g_data: dict,
-        winners: list[discord.Member],
-        original_embed: discord.Embed = None,
-        status: str | None = None,
-    ) -> discord.Embed:
-        """Builds the final 'Giveaway Ended' embed."""
-        embed = original_embed if original_embed else discord.Embed()
-        embed.title = "🎉 Giveaway Ended! 🎉"
-        embed.color = discord.Color.red()
-        embed.description = None  # Clear "Click to enter" description
-
-        # Clear old fields and add the ones we want
-        embed.clear_fields()
-        embed.add_field(name="Prize", value=g_data.get("prize", "—"), inline=True)
-
-        if not winners:
-            winner_mentions = "No one! Maybe they all left?"
-        else:
-            winner_mentions = ", ".join(w.mention for w in winners)
-
-        embed.add_field(name="Winners", value=winner_mentions, inline=False)
-        if status:
-            embed.add_field(name="Status", value=status, inline=False)
-        return embed
-
-    # --- GIVEAWAY START COMMAND ---
-    @app_commands.command(
-        name="giveaway", description="[Admin] Start a giveaway in the current channel."
-    )
-    @app_commands.describe(
-        prize="What is the prize for the giveaway?",
-        duration="How many minutes the giveaway should last.",
-        winners="How many winners should be drawn.",
-    )
-    @app_commands.guild_only()
-    @app_commands.default_permissions(manage_guild=True)
-    @app_commands.checks.has_permissions(manage_guild=True)
-    async def giveaway_start(
-        self, interaction: discord.Interaction, prize: str, duration: int, winners: int
-    ):
-        giveaway_message = None
-        try:
-            if not isinstance(
-                interaction.channel, (discord.TextChannel, discord.Thread)
-            ):
-                return await interaction.response.send_message(
-                    "Run this in a text channel or thread.", ephemeral=True
-                )
-
-            if duration <= 0 or winners <= 0:
-                await interaction.response.send_message(
-                    "Duration and winner count must be greater than zero.",
-                    ephemeral=True,
-                )
-                return
-            if winners > 50 or duration > 60 * 24 * 14:
-                return await interaction.response.send_message(
-                    "Please keep winners ≤ 50 and duration ≤ 14 days.", ephemeral=True
-                )
-
-            now = datetime.now(timezone.utc)
-            end_time = now + timedelta(minutes=duration)
-            ts = int(end_time.timestamp())
-
-            title_prize = prize if len(prize) <= 220 else prize[:217] + "..."
-            embed = discord.Embed(
-                title=f"🎉 Giveaway: {title_prize} 🎉", color=discord.Color.gold()
-            )
-            embed.add_field(name="Host", value=interaction.user.mention, inline=True)
-            embed.add_field(name="Prize", value=prize, inline=True)
-            embed.add_field(name="Winners", value=str(winners), inline=True)
-            embed.add_field(name="Entries", value="0", inline=True)
-            embed.add_field(
-                name="Ends",
-                value=f"<t:{ts}:R> (<t:{ts}:F>)",
-                inline=False,
-            )
-            embed.description = "Click **Enter Giveaway** below to join."
-            embed.set_footer(text=f"Started by {interaction.user.display_name}")
-
-            await interaction.response.send_message("Giveaway started!", ephemeral=True)
-            giveaway_message = await interaction.channel.send(
-                embed=embed, view=GiveawayView()
-            )
-
-            await db.create_giveaway(
-                message=giveaway_message,
-                prize=prize,
-                end_time=end_time,
-                winner_count=winners,
-                host=interaction.user,
-            )
-        except Exception:
-            if giveaway_message:
-                logger.exception(
-                    "create_giveaway failed; cleaning up message %s",
-                    giveaway_message.id,
-                )
-                try:
-                    await giveaway_message.edit(
-                        view=None, content="Giveaway setup failed."
-                    )
-                except Exception:
-                    pass
-            else:
-                logger.exception("create_giveaway failed before message could be sent.")
-            try:
-                if interaction.response.is_done():
-                    await interaction.followup.send(
-                        "⚠️ Giveaway setup failed.", ephemeral=True
-                    )
-                else:
-                    await interaction.response.send_message(
-                        "⚠️ Giveaway setup failed.", ephemeral=True
-                    )
-            except Exception:
-                pass
-
-            return
-
-    # --- BACKGROUND TASK FOR ENDING GIVEAWAYS ---
-    @tasks.loop(seconds=config.GIVEAWAY_CHECK_INTERVAL)
-    async def check_giveaways_loop(self):
-        now = datetime.now(timezone.utc)
-        due = await db.get_due_giveaways(now.isoformat())
-        for g in due:
-            await self.process_ended_giveaway(g)
-
-    @check_giveaways_loop.before_loop
-    async def _before_loop(self):
-        await self.bot.wait_until_ready()
 
     # --- GIVEAWAY ENDING LOGIC ---
     async def process_ended_giveaway(self, g: dict):
@@ -336,41 +264,112 @@ class Giveaway(commands.Cog):
                 extra={"gid": g["guild_id"], "cid": g["channel_id"]},
             )
 
-    # --- HELPER METHODS FOR WINNER SELECTION (moved from the view) ---
-    def _weights_for(self, entrants: list[discord.Member]) -> list[int]:
-        weights = []
-        for member in entrants:
-            weight = config.DEFAULT_WEIGHT
-            if member.roles:
-                weight = max(
-                    [weight] + [config.ROLE_WEIGHTS.get(r.id, 0) for r in member.roles]
+    # --- GIVEAWAY START COMMAND ---
+    @app_commands.command(
+        name="giveaway", description="[Admin] Start a giveaway in the current channel."
+    )
+    @app_commands.describe(
+        prize="What is the prize for the giveaway?",
+        duration="How many minutes the giveaway should last.",
+        winners="How many winners should be drawn.",
+    )
+    @app_commands.guild_only()
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def giveaway_start(
+        self, interaction: discord.Interaction, prize: str, duration: int, winners: int
+    ):
+        giveaway_message = None
+        try:
+            if not isinstance(
+                interaction.channel, (discord.TextChannel, discord.Thread)
+            ):
+                return await interaction.response.send_message(
+                    "Run this in a text channel or thread.", ephemeral=True
                 )
-            weights.append(weight)
-        return weights
 
-    def _pick_winners(
-        self, entrants: list[discord.Member], weights: list[int], k: int
-    ) -> list[discord.Member]:
-        k = min(k, len(entrants))
-        if k <= 0:
-            return []
+            if duration <= 0 or winners <= 0:
+                await interaction.response.send_message(
+                    "Duration and winner count must be greater than zero.",
+                    ephemeral=True,
+                )
+                return
+            if winners > 50 or duration > 60 * 24 * 14:
+                return await interaction.response.send_message(
+                    "Please keep winners ≤ 50 and duration ≤ 14 days.", ephemeral=True
+                )
 
-        pool = list(zip(entrants, weights))
-        total = sum(w for _, w in pool)
-        winners: list[discord.Member] = []
-        for _ in range(k):
-            if total <= 0:
-                break
-            r = random.uniform(0, total)
-            upto = 0.0
-            for i, (m, w) in enumerate(pool):
-                upto += w
-                if upto >= r:
-                    winners.append(m)
-                    pool.pop(i)
-                    total -= w
-                    break
-        return winners
+            now = datetime.now(timezone.utc)
+            end_time = now + timedelta(minutes=duration)
+            ts = int(end_time.timestamp())
+
+            title_prize = prize if len(prize) <= 220 else prize[:217] + "..."
+            embed = discord.Embed(
+                title=f"🎉 Giveaway: {title_prize} 🎉", color=discord.Color.gold()
+            )
+            embed.add_field(name="Host", value=interaction.user.mention, inline=True)
+            embed.add_field(name="Prize", value=prize, inline=True)
+            embed.add_field(name="Winners", value=str(winners), inline=True)
+            embed.add_field(name="Entries", value="0", inline=True)
+            embed.add_field(
+                name="Ends",
+                value=f"<t:{ts}:R> (<t:{ts}:F>)",
+                inline=False,
+            )
+            embed.description = "Click **Enter Giveaway** below to join."
+            embed.set_footer(text=f"Started by {interaction.user.display_name}")
+
+            await interaction.response.send_message("Giveaway started!", ephemeral=True)
+            giveaway_message = await interaction.channel.send(
+                embed=embed, view=GiveawayView()
+            )
+
+            await db.create_giveaway(
+                message=giveaway_message,
+                prize=prize,
+                end_time=end_time,
+                winner_count=winners,
+                host=interaction.user,
+            )
+        except Exception:
+            if giveaway_message:
+                logger.exception(
+                    "create_giveaway failed; cleaning up message %s",
+                    giveaway_message.id,
+                )
+                try:
+                    await giveaway_message.edit(
+                        view=None, content="Giveaway setup failed."
+                    )
+                except Exception:
+                    pass
+            else:
+                logger.exception("create_giveaway failed before message could be sent.")
+            try:
+                if interaction.response.is_done():
+                    await interaction.followup.send(
+                        "⚠️ Giveaway setup failed.", ephemeral=True
+                    )
+                else:
+                    await interaction.response.send_message(
+                        "⚠️ Giveaway setup failed.", ephemeral=True
+                    )
+            except Exception:
+                pass
+
+            return
+
+    # --- BACKGROUND TASK FOR ENDING GIVEAWAYS ---
+    @tasks.loop(seconds=config.GIVEAWAY_CHECK_INTERVAL)
+    async def check_giveaways_loop(self):
+        now = datetime.now(timezone.utc)
+        due = await db.get_due_giveaways(now.isoformat())
+        for g in due:
+            await self.process_ended_giveaway(g)
+
+    @check_giveaways_loop.before_loop
+    async def _before_loop(self):
+        await self.bot.wait_until_ready()
 
     @app_commands.command(
         name="giveaway-end",

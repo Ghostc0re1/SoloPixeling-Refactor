@@ -1,36 +1,40 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -Eeuo pipefail
 
-# This script runs a linter and tests for the project.
-# It's configured to exit immediately if any command fails.
-set -e
-
-# --- Configuration ---
 SRC_DIR="src"
-TEST_DIR="tests" # Assuming your tests are in a 'tests' directory
+TEST_DIR="tests"
 
-# --- 1. Run Linter ---
-echo "---  Linting Code ---"
-pylint $SRC_DIR
+need() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "❌ Missing required tool: $1"
+    echo "   Run: python -m pip install $1"
+    exit 127
+  fi
+}
+
+echo "--- Checking tooling ---"
+need python
+need pylint
+need pytest
+
+echo "--- Linting Code ---"
+pylint "$SRC_DIR"
 echo "✅ Linter passed."
-echo "" # Add a newline for readability
+echo
 
-# --- 2. Run Tests ---
 echo "--- Running Tests ---"
-pytest -q $TEST_DIR
+pytest -q "$TEST_DIR"
 echo "✅ Tests passed."
-echo ""
+echo
 
-# --- Success ---
+# Optional: only freeze if explicitly requested
+if [[ "${1-}" == "--freeze" ]]; then
+  echo "--- Freezing dependencies ---"
+  # Prod requirements (your app deps)
+  python -m pip freeze > requirements.txt
+  # Dev requirements (include lint/test tools)
+  python -m pip freeze > requirements-dev.txt
+  echo "✅ Requirements frozen."
+fi
+
 echo "🎉 All checks passed successfully!"
-
-
-# --- 3. Freeze PIP ---
-echo "---  Freezing PIP ---"
-pip freeze > requirements.txt
-
-# --- 4. Freeze PIP Dev ---
-echo "---  Freezing PIP Dev ---"
-pip freeze > requirements-dev.txt
-
-
-echo "---  Job's Done. ---"

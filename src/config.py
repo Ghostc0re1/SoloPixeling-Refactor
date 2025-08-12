@@ -3,7 +3,7 @@
 import os
 from pathlib import Path
 from dotenv import load_dotenv
-from helpers.schedule_utils import PingSchedule
+from utility.schedule_utils import PingSchedule
 
 load_dotenv()
 
@@ -220,6 +220,7 @@ CARD_HEIGHT = 400
 TEXT_GAP = 25
 MAX_UPLOAD_BYTES = 2 * 1024 * 1024
 ALLOWED_MIME = {"image/png", "image/jpeg", "image/webp"}
+MAX_PIXELS = 80_000_000  # ~8k x 10k
 
 # === Role Update Alerts ===
 ROLE_ALERTS = [
