@@ -8,8 +8,11 @@ from discord import app_commands
 #
 import config
 from data import database
+from helpers.logging_helper import get_logger
 from utility.level_utils import level_from_xp, build_xp_status
 from views.purge_confirmation_view import PurgeConfirmationView
+
+logger = get_logger("settings")
 
 
 class SettingsCog(commands.Cog, name="Settings"):
@@ -40,6 +43,12 @@ class SettingsCog(commands.Cog, name="Settings"):
             f"✅ Welcome messages will now be sent to {channel.mention}.",
             ephemeral=True,
         )
+        logger.info(
+            "Set welcome channel: guild=%s channel_id=%s by user=%s",
+            interaction.guild.id,
+            channel.id,
+            interaction.user.id,
+        )
 
     @channel_group.command(
         name="set-levelup",
@@ -61,6 +70,12 @@ class SettingsCog(commands.Cog, name="Settings"):
         await interaction.response.send_message(
             f"✅ Level-up announcements will now be sent to {channel.mention}.",
             ephemeral=True,
+        )
+        logger.info(
+            "Set levelup channel: guild=%s channel_id=%s by user=%s",
+            interaction.guild.id,
+            channel.id,
+            interaction.user.id,
         )
 
     @channel_group.command(
@@ -97,8 +112,8 @@ class SettingsCog(commands.Cog, name="Settings"):
 
             view.message = await interaction.original_response()
 
-        except Exception as e:
-            print(f"Error in /purge-messages command: {e}")
+        except Exception:
+            logger.exception("Error in /purge-messages command")
             await interaction.followup.send(
                 "An unexpected error occurred. Please check the logs.",
             )
@@ -131,8 +146,14 @@ class SettingsCog(commands.Cog, name="Settings"):
             await interaction.followup.send(
                 f"✅ XP cooldown set to **{seconds}** seconds.", ephemeral=True
             )
-        except Exception as e:
-            print(f"Error in /set-cooldown command: {e}")
+            logger.info(
+                "Set cooldown: guild=%s cooldown_s=%s by user=%s",
+                interaction.guild.id,
+                seconds,
+                interaction.user.id,
+            )
+        except Exception:
+            logger.exception("Error in /set-cooldown command")
             await interaction.followup.send(
                 "An unexpected error occurred. Please check the logs.",
             )
@@ -163,8 +184,15 @@ class SettingsCog(commands.Cog, name="Settings"):
             await interaction.followup.send(
                 f"XP range set to {min_xp}-{max_xp}.", ephemeral=True
             )
-        except Exception as e:
-            print(f"Error in /xprange command: {e}")
+            logger.info(
+                "Set XP range: guild=%s min=%s max=%s by user=%s",
+                interaction.guild.id,
+                min_xp,
+                max_xp,
+                interaction.user.id,
+            )
+        except Exception:
+            logger.exception("Error in /xprange command")
             await interaction.followup.send(
                 "An unexpected error occurred. Please check the logs.",
             )
@@ -210,8 +238,19 @@ class SettingsCog(commands.Cog, name="Settings"):
                 msg += "⚠️ Roles removed: " + ", ".join(removed)
 
             await interaction.followup.send(msg, ephemeral=True)
-        except Exception as e:
-            print(f"Error in /removeallxp command: {e}")
+            logger.info(
+                "RemoveAllXP: guild=%s actor=%s target=%s old_level=%s old_xp=%s -> level=%s xp=%s roles_removed=%s",
+                interaction.guild.id,
+                interaction.user.id,
+                member.id,
+                old_level,
+                old_total_xp,
+                new_status.level,
+                new_status.total_xp,
+                ",".join(removed) if removed else "-",
+            )
+        except Exception:
+            logger.exception("Error in /removeallxp command")
             await interaction.followup.send(
                 "An unexpected error occurred. Please check the logs.",
             )
@@ -251,9 +290,20 @@ class SettingsCog(commands.Cog, name="Settings"):
             )
             if awarded:
                 msg += "🎉 Roles awarded: " + ", ".join(awarded)
-            await interaction.followup.send(msg)
-        except Exception as e:
-            print(f"Error in /addxp command: {e}")
+            await interaction.followup.send(msg, ephemeral=True)
+            logger.info(
+                "AddXP: guild=%s actor=%s target=%s amount=%s old_level=%s -> level=%s total_xp=%s roles_awarded=%s",
+                interaction.guild.id,
+                interaction.user.id,
+                member.id,
+                amount,
+                old_level,
+                new_status.level,
+                new_status.total_xp,
+                ",".join(awarded) if awarded else "-",
+            )
+        except Exception:
+            logger.exception("Error in /addxp command")
             await interaction.followup.send(
                 "An unexpected error occurred. Please check the logs.",
             )
@@ -299,10 +349,21 @@ class SettingsCog(commands.Cog, name="Settings"):
             if removed:
                 msg += "⚠️ Roles removed: " + ", ".join(removed)
 
-            await interaction.followup.send(msg)
+            await interaction.followup.send(msg, ephemeral=True)
+            logger.info(
+                "RemoveXP: guild=%s actor=%s target=%s amount=%s old_level=%s -> level=%s total_xp=%s roles_removed=%s",
+                interaction.guild.id,
+                interaction.user.id,
+                member.id,
+                amount,
+                old_level,
+                new_status.level,
+                new_status.total_xp,
+                ",".join(removed) if removed else "-",
+            )
 
-        except Exception as e:
-            print(f"Error in /removexp command: {e}")
+        except Exception:
+            logger.exception("Error in /removexp command")
             await interaction.followup.send(
                 "An unexpected error occurred. Please check the logs.",
             )

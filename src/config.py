@@ -56,6 +56,9 @@ if not TOKEN:
 HERE = Path(__file__).parent
 ROOT_DIR = HERE.parent
 
+# === Logging ===
+DEFAULT_FMT = "%(asctime)s %(levelname)s [%(name)s] %(message)s"
+DEFAULT_DATEFMT = "%Y-%m-%d %H:%M:%S"
 # === Fonts ===
 REGULAR_FONT_PATH = ROOT_DIR / "fonts" / "Roboto" / "static" / "Roboto-Regular.ttf"
 BOLD_FONT_PATH = ROOT_DIR / "fonts" / "Roboto" / "static" / "Roboto-Bold.ttf"

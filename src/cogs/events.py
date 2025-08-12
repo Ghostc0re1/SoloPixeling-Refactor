@@ -1,11 +1,13 @@
-import logging
 import discord
 from discord.ext import commands
 import config
 from data import database
+from helpers.logging_helper import add_throttle, get_logger
 from utility import image_utils
 
-log = logging.getLogger(__name__)
+log = get_logger("events")
+join_log = get_logger("events.join")
+add_throttle(join_log, 60)
 
 
 class Events(commands.Cog, name="Events"):
@@ -15,13 +17,17 @@ class Events(commands.Cog, name="Events"):
 
     @commands.Cog.listener()
     async def on_ready(self):
-        all_settings = await database.get_all_channel_settings()
-        for guild_id, settings in all_settings.items():
-            if settings and settings.get("welcome"):
-                self.welcome_channels[guild_id] = settings["welcome"]
-        print(
-            f"Loaded welcome channel settings for {len(self.welcome_channels)} guilds."
-        )
+        try:
+            all_settings = await database.get_all_channel_settings()
+            for guild_id, settings in all_settings.items():
+                if settings and settings.get("welcome"):
+                    self.welcome_channels[guild_id] = settings["welcome"]
+                log.info(
+                    "Loaded welcome channel settings for %d guilds.",
+                    len(self.welcome_channels),
+                )
+        except Exception:
+            log.exception("Failed to load welcome channel settings")
 
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member):
@@ -30,6 +36,9 @@ class Events(commands.Cog, name="Events"):
 
         if member.guild.id != config.GUILD_ID:
             return
+
+        # throttled heatbeat for joins
+        join_log.debug("Join: guild=%s user=%s", member.guild.id, member.id)
 
         channel_id = self.welcome_channels.get(
             member.guild.id, config.DEFAULT_WELCOME_CHANNEL_ID
