@@ -34,6 +34,8 @@ add_throttle(xp_logger, 60)
 heartbeat = get_logger("leveling.heartbeat")
 add_throttle(heartbeat, 300)
 
+ET = ZoneInfo("America/New_York")
+
 
 class Leveling(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -73,6 +75,19 @@ class Leveling(commands.Cog):
             if not self._awards_started:
                 self.daily_award_task.start()
                 self._awards_started = True
+
+                ystr = (datetime.now(ET).date() - timedelta(days=1)).isoformat()
+                if await database.daily_xp_exists(ystr):
+                    log.info(
+                        "🔄 Catch-up: daily_xp present for %s, processing now.", ystr
+                    )
+                    await self._process_daily_awards_for_date(ystr)
+                else:
+                    log.info(
+                        "✅ Catch-up: no daily_xp rows for %s (already processed/reset).",
+                        ystr,
+                    )
+
         except Exception:
             log.exception("Failed to load leveling settings on_ready")
 
@@ -188,6 +203,80 @@ class Leveling(commands.Cog):
         except Exception:
             log.exception("Failed to announce level up for %s", message.author.id)
 
+    async def _process_daily_awards_for_date(self, target_date: str):
+        log.info("🏁 Processing daily awards for %s", target_date)
+        for guild in self.bot.guilds:
+            try:
+                top = await database.get_daily_top_user(guild.id, target_date)
+                if not top:
+                    log.info(
+                        "No daily_xp rows for guild=%s on %s", guild.id, target_date
+                    )
+                    continue
+
+                user_id, xp_gain = top
+                role = guild.get_role(config.DAILY_XP_ROLE)
+                if not role:
+                    log.warning("DAILY_XP_ROLE not found in guild=%s", guild.id)
+                    continue
+
+                member = guild.get_member(user_id) or await guild.fetch_member(user_id)
+
+                for m in list(role.members):
+                    try:
+                        await m.remove_roles(
+                            role, reason=f"Daily XP reset {target_date}"
+                        )
+                    except discord.Forbidden:
+                        log.warning(
+                            "No perms removing role from %s in %s", m.id, guild.id
+                        )
+                    except discord.HTTPException as e:
+                        log.warning(
+                            "HTTP error removing role from %s in %s: %s",
+                            m.id,
+                            guild.id,
+                            e,
+                        )
+
+                if role not in member.roles:
+                    await member.add_roles(
+                        role, reason=f"Most XP on {target_date}: {xp_gain}"
+                    )
+
+                chan_id = config.DAILY_ANNOUNCE_CHANNEL.get(guild.id)
+                if chan_id:
+                    ch = guild.get_channel(chan_id) or await self.bot.fetch_channel(
+                        chan_id
+                    )
+                    if isinstance(ch, discord.TextChannel):
+                        await ch.send(
+                            f"🏆 Congrats {member.mention}: you gained **{xp_gain} XP** on {target_date}!"
+                        )
+                    else:
+                        log.warning(
+                            "Configured announce channel %s is not a TextChannel in %s",
+                            chan_id,
+                            guild.id,
+                        )
+
+            except discord.Forbidden:
+                log.warning(
+                    "Missing permissions for daily awards in guild %s", guild.id
+                )
+            except discord.NotFound:
+                continue
+            except Exception:
+                log.exception(
+                    "Error in daily awards for guild %s (%s)", guild.id, target_date
+                )
+
+        try:
+            await database.reset_daily_xp(target_date)
+            log.info("reset_daily_xp complete for %s", target_date)
+        except Exception:
+            log.exception("Failed to reset daily XP for %s", target_date)
+
     @app_commands.command(
         name="rank", description="Check your (or someone else's) rank & XP"
     )
@@ -271,53 +360,11 @@ class Leveling(commands.Cog):
                 ephemeral=True,
             )
 
-    @tasks.loop(time=dt_time(0, 0, tzinfo=ZoneInfo("America/New_York")))
+    @tasks.loop(time=dt_time(0, 0, tzinfo=ET))
     async def daily_award_task(self):
-        eastern_now = datetime.now(ZoneInfo("America/New_York"))
-        heartbeat.debug("Running daily_award_task tick at %s", eastern_now.isoformat())
-        yesterday = (eastern_now - timedelta(days=1)).strftime("%Y-%m-%d")
-
-        for guild in self.bot.guilds:
-            try:
-                top = await database.get_daily_top_user(guild.id, yesterday)
-                if not top:
-                    continue
-                user_id, xp_gain = top
-
-                role = guild.get_role(config.DAILY_XP_ROLE)
-
-                try:
-                    member = await guild.fetch_member(user_id)
-                except discord.NotFound:
-                    continue
-                if not role:
-                    continue
-
-                for m in role.members:
-                    await m.remove_roles(role, reason="Daily XP reset")
-
-                await member.add_roles(role, reason=f"Most XP yesterday: {xp_gain}")
-
-                chan_id = config.DAILY_ANNOUNCE_CHANNEL.get(guild.id)
-                if chan_id:
-                    ch = guild.get_channel(chan_id)
-                    if ch:
-                        await ch.send(
-                            f"🏆 Congrats {member.mention}: you gained **{xp_gain} XP** yesterday!"
-                        )
-            except discord.NotFound:
-                continue
-            except discord.Forbidden:
-                log.warning(
-                    "Missing permissions for daily awards in guild %s", guild.id
-                )
-            except Exception:
-                log.error("Error in daily_award_task for guild %s", guild.id)
-
-        try:
-            await database.reset_daily_xp(yesterday)
-        except Exception:
-            log.exception("Failed to reset daily XP for %s", yesterday)
+        target_date = (datetime.now(ET) - timedelta(days=1)).strftime("%Y-%m-%d")
+        log.info("⏰ daily_award_task tick for %s", target_date)
+        await self._process_daily_awards_for_date(target_date)
 
     @daily_award_task.before_loop
     async def before_daily_award(self):
