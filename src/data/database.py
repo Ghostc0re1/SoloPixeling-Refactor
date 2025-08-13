@@ -54,7 +54,7 @@ async def increment_daily_xp(user_id: int, guild_id: int, amount: int):
 
 
 #
-async def get_daily_top_user(guild_id: int, date: str) -> tuple | None:
+async def get_daily_top_user(guild_id: int, date: str) -> tuple[int, int] | None:
     """Returns (user_id, xp_gain) for the top gainer on `date` in this guild."""
 
     def _exec():
@@ -71,7 +71,7 @@ async def get_daily_top_user(guild_id: int, date: str) -> tuple | None:
     response = await _db(_exec)
     if response.data:
         top_user = response.data[0]
-        return top_user["user_id"], top_user["xp_gain"]
+        return int(top_user["user_id"]), int(top_user["xp_gain"])
     return None
 
 
@@ -83,6 +83,21 @@ async def reset_daily_xp(date: str):
         supabase.table("daily_xp").delete().eq("date", date).execute()
 
     await _db(_exec)
+
+
+# Returns True if any daily_xp rows exist for the given date
+async def daily_xp_exists(date: str) -> bool:
+    def _exec():
+        return (
+            supabase.table("daily_xp")
+            .select("user_id", count="exact")
+            .eq("date", date)
+            .limit(1)
+            .execute()
+        )
+
+    res = await _db(_exec)
+    return (getattr(res, "count", None) or 0) > 0 or bool(res.data)
 
 
 #
