@@ -106,7 +106,7 @@ async def generate_rank_card(data: RankCardData) -> discord.File:
     font_level = _load_font(84)
     font_remaining_xp = _load_font(36)
     font_total_xp = _load_font(64)
-    font_xp = _load_font(24)
+    font_xp = _load_font(30)
 
     if data.rank is not None:
         if data.rank < 10:

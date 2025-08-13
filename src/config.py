@@ -91,35 +91,35 @@ WELCOME_IMAGE_BOUNDARY = (300, 380, 1620, 860)
 # === Ping & Scheduling ===
 PING_SCHEDULES: tuple[PingSchedule, ...] = (
     PingSchedule(
-        1388695009712279762, 1396172087764455604, 14, 0, [1, 3, 5], "💎 EU Gem Realm 💎"
+        1388695009712279762, 1396172087764455604, 14, 0, (1, 3, 5), "💎 EU Gem Realm 💎"
     ),
     PingSchedule(
-        1388693691421560964, 1396172087764455604, 20, 0, [1, 3, 5], "💎 NA Gem Realm 💎"
+        1388693691421560964, 1396172087764455604, 20, 0, (1, 3, 5), "💎 NA Gem Realm 💎"
     ),
     PingSchedule(
-        1396167212766724176, 1396172087764455604, 14, 0, [6], "🔆 NA Guild Tourny 🔆"
+        1396167212766724176, 1396172087764455604, 14, 0, (6,), "🔆 NA Guild Tourny 🔆"
     ),
     PingSchedule(
-        1396167295461621911, 1396172087764455604, 8, 0, [6], "🔅 EU Guild Tourny 🔅"
+        1396167295461621911, 1396172087764455604, 8, 0, (6,), "🔅 EU Guild Tourny 🔅"
     ),
     PingSchedule(
-        1396167320052961390, 1396172087764455604, 13, 0, [2, 6], "💵 NA CoP 💵"
+        1396167320052961390, 1396172087764455604, 13, 0, (2, 6), "💵 NA CoP 💵"
     ),
     PingSchedule(
-        1396167370338205898, 1396172087764455604, 7, 0, [2, 6], "💶 EU CoP 💶"
+        1396167370338205898, 1396172087764455604, 7, 0, (2, 6), "💶 EU CoP 💶"
     ),
     PingSchedule(
         1219683840306712707,
         1235827891091017739,
         13,
         0,
-        [0, 2, 4],
+        (0, 2, 4),
         (
             "\n### Attack mirror number for:"
             "\n3<:star:1394825053111062609> and hold for cleanup or sweep."
             "\n### Or attack them for:"
             "\n1<:star:1394825053111062609> and 2<:star:1394825053111062609>"
-            "\n*Example: If you're #5 on the guild side, attack the enemy #5.*",
+            "\n*Example: If you're #5 on the guild side, attack the enemy #5.*"
         ),
         18,
         0,
@@ -129,7 +129,7 @@ PING_SCHEDULES: tuple[PingSchedule, ...] = (
         1235827891091017739,
         20,
         0,
-        [0, 2, 4],
+        (0, 2, 4),
         ("Clean up any open bases or sweep."),
         22,
         0,
@@ -139,13 +139,13 @@ PING_SCHEDULES: tuple[PingSchedule, ...] = (
         1381394614233202751,
         13,
         0,
-        [0, 2, 4],
+        (0, 2, 4),
         (
             "\n### Unless told otherwise: "
             "\n### Attack one enemy for:"
             "\n3<:star:1394825053111062609> and hold for cleanup or sweep."
             "\n### Or attack them for:"
-            "\n1<:star:1394825053111062609> and 2<:star:1394825053111062609>",
+            "\n1<:star:1394825053111062609> and 2<:star:1394825053111062609>"
         ),
         18,
         0,
@@ -155,7 +155,7 @@ PING_SCHEDULES: tuple[PingSchedule, ...] = (
         1381394614233202751,
         20,
         0,
-        [0, 2, 4],
+        (0, 2, 4),
         ("Clean up any open bases or sweep."),
         22,
         0,
@@ -165,7 +165,7 @@ PING_SCHEDULES: tuple[PingSchedule, ...] = (
         1308267362868531311,
         13,
         0,
-        [0, 2, 4],
+        (0, 2, 4),
         (
             "\n### Unless told otherwise: "
             "\n### Attack one enemy for:\n3<:star:1394825053111062609> "
@@ -181,7 +181,7 @@ PING_SCHEDULES: tuple[PingSchedule, ...] = (
         1308267362868531311,
         20,
         0,
-        [0, 2, 4],
+        (0, 2, 4),
         ("Clean up any open bases or sweep."),
         22,
         0,
