@@ -9,12 +9,14 @@ import discord
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
+from helpers.logging_helper import get_logger
+
 
 #
 # --- Initialization ---
 #
 load_dotenv()
-logger = logging.getLogger(__name__)
+logger = get_logger("database")
 #
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
@@ -35,19 +37,11 @@ async def _db(call):
 #
 # --- Daily XP Functions ---
 #
-async def increment_daily_xp(user_id: int, guild_id: int, amount: int):
-    """Adds XP to today's gain for a user by calling the database function."""
-
+async def increment_daily_xp(user_id: int, guild_id: int, delta: int) -> None:
     def _exec():
-        today = datetime.now(timezone.utc).date().isoformat()
-        supabase.rpc(
+        return supabase.rpc(
             "increment_daily_xp_for_user",
-            {
-                "p_guild_id": guild_id,
-                "p_user_id": user_id,
-                "p_date": today,
-                "p_amount": amount,
-            },
+            {"p_guild_id": guild_id, "p_user_id": user_id, "p_delta": delta},
         ).execute()
 
     await _db(_exec)
@@ -55,34 +49,44 @@ async def increment_daily_xp(user_id: int, guild_id: int, amount: int):
 
 #
 async def get_daily_top_user(guild_id: int, date: str) -> tuple[int, int] | None:
-    """Returns (user_id, xp_gain) for the top gainer on `date` in this guild."""
+    """Return (user_id, xp_gain) for the ET calendar `date` in this guild, or None."""
 
     def _exec():
         return (
             supabase.table("daily_xp")
-            .select("user_id", "xp_gain")
+            .select("user_id,xp_gain", count="exact")
             .eq("guild_id", guild_id)
             .eq("date", date)
             .order("xp_gain", desc=True)
+            .order("user_id", desc=True)
             .limit(1)
             .execute()
         )
 
-    response = await _db(_exec)
-    if response.data:
-        top_user = response.data[0]
-        return int(top_user["user_id"]), int(top_user["xp_gain"])
+    resp = await _db(_exec)
+    logger.debug(
+        "daily_xp count guild=%s date=%s -> %s",
+        guild_id,
+        date,
+        getattr(resp, "count", None),
+    )
+    if resp.data:
+        r = resp.data[0]
+        return int(r["user_id"]), int(r["xp_gain"])
     return None
 
 
 #
-async def reset_daily_xp(date: str):
-    """Purges all rows for a given date."""
+async def reset_daily_xp(date_str: str) -> int:
+    """Deletes all rows for ET date `date_str` via SECURITY DEFINER RPC. Returns deleted count."""
 
     def _exec():
-        supabase.table("daily_xp").delete().eq("date", date).execute()
+        return supabase.rpc("admin_reset_daily_xp", {"p_date": date_str}).execute()
 
-    await _db(_exec)
+    resp = await _db(_exec)
+    deleted = int(resp.data or 0)
+    logger.info("reset_daily_xp(%s) deleted=%s", date_str, deleted)
+    return deleted
 
 
 # Returns True if any daily_xp rows exist for the given date
