@@ -153,8 +153,8 @@ class Giveaway(commands.Cog):
             await self._update_entry_count(message)
         except discord.NotFound:
             pass
-        except Exception as e:
-            print(f"Failed to update giveaway message {message.id}: {e}")
+        except Exception:
+            logger.exception("Failed to update giveaway message %s", message.id)
         finally:
             self._update_tasks.pop(message.id, None)
 
@@ -164,7 +164,7 @@ class Giveaway(commands.Cog):
         If not, it creates and schedules a new one.
         """
         if message.id not in self._update_tasks:
-            self._update_tasks[message.id] = self.bot.loop.create_task(
+            self._update_tasks[message.id] = asyncio.create_task(
                 self._debounced_update(message)
             )
 
