@@ -27,7 +27,9 @@ class Giveaway(commands.Cog):
         self.bot = bot
         self.check_giveaways_loop.start()
         self._update_tasks = {}
-        self.bot.add_view(GiveawayView(self))
+        if not getattr(bot, "_giveaway_view_registered", False):
+            bot.add_view(GiveawayView(self))
+            bot._giveaway_view_registered = True
 
     async def cog_unload(self):
         try:
