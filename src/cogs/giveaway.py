@@ -1,5 +1,6 @@
 # src/cogs/giveaway.py
 
+import asyncio
 import random
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -25,13 +26,22 @@ class Giveaway(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.check_giveaways_loop.start()
+        self._update_tasks = {}
+        if not getattr(bot, "_giveaway_view_registered", False):
+            bot.add_view(GiveawayView(self))
+            bot._giveaway_view_registered = True
 
     async def cog_unload(self):
         try:
-            if self.check_giveaways_loop.is_running():
-                self.check_giveaways_loop.cancel()
+            self.check_giveaways_loop.cancel()
         except Exception:
-            logger.exception("Failed to unload check_giveaways_loop")
+            logger.exception("Failed to cancel check_giveaways_loop")
+
+        try:
+            for task in self._update_tasks.values():
+                task.cancel()
+        except Exception:
+            logger.exception("Failed to cancel _update_tasks")
 
     # --- Private Functions ---
     def _find_field_index(self, embed: discord.Embed, name_prefix: str) -> int | None:
@@ -132,6 +142,56 @@ class Giveaway(commands.Cog):
             if m := await fetch_member_safe(guild, uid):
                 entrants.append(m)
         return entrants
+
+    async def _debounced_update(self, message: discord.Message):
+        """
+        This is the actual task that waits, updates, and cleans up.
+        It's designed to be created by _schedule_update.
+        """
+        try:
+
+            await asyncio.sleep(15)
+            message = await message.channel.fetch_message(message.id)
+            await self._update_entry_count(message)
+        except discord.NotFound:
+            pass
+        except Exception:
+            logger.exception("Failed to update giveaway message %s", message.id)
+        finally:
+            self._update_tasks.pop(message.id, None)
+
+    async def _schedule_update(self, message: discord.Message):
+        """
+        Checks if an update task is already running for a message.
+        If not, it creates and schedules a new one.
+        """
+        if message.id not in self._update_tasks:
+            self._update_tasks[message.id] = asyncio.create_task(
+                self._debounced_update(message)
+            )
+
+    async def _update_entry_count(self, message: discord.Message):
+        """Fetches entry count from DB and updates the embed."""
+        entry_count = await db.get_entry_count(message.id)
+
+        # Safer embed handling
+        embed = (
+            message.embeds[0]
+            if message.embeds
+            else discord.Embed(color=discord.Color.gold())
+        )
+
+        # Ensure Entries field exists
+        for i, f in enumerate(embed.fields):
+            if f.name == "Entries":
+                embed.set_field_at(
+                    i, name="Entries", value=str(entry_count), inline=True
+                )
+                break
+        else:
+            embed.add_field(name="Entries", value=str(entry_count), inline=True)
+
+        await message.edit(embed=embed)
 
     # --- GIVEAWAY ENDING LOGIC ---
     async def process_ended_giveaway(self, g: dict):
@@ -259,23 +319,24 @@ class Giveaway(commands.Cog):
     async def giveaway_start(
         self, interaction: discord.Interaction, prize: str, duration: int, winners: int
     ):
+        await interaction.response.defer(ephemeral=True, thinking=True)
         giveaway_message = None
         try:
             if not isinstance(
                 interaction.channel, (discord.TextChannel, discord.Thread)
             ):
-                return await interaction.response.send_message(
+                return await interaction.followup.send(
                     "Run this in a text channel or thread.", ephemeral=True
                 )
 
             if duration <= 0 or winners <= 0:
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     "Duration and winner count must be greater than zero.",
                     ephemeral=True,
                 )
                 return
             if winners > 50 or duration > 60 * 24 * 14:
-                return await interaction.response.send_message(
+                return await interaction.followup.send(
                     "Please keep winners ≤ 50 and duration ≤ 14 days.", ephemeral=True
                 )
 
@@ -299,9 +360,9 @@ class Giveaway(commands.Cog):
             embed.description = "Click **Enter Giveaway** below to join."
             embed.set_footer(text=f"Started by {interaction.user.display_name}")
 
-            await interaction.response.send_message("Giveaway started!", ephemeral=True)
+            await interaction.followup.send("Giveaway started!", ephemeral=True)
             giveaway_message = await interaction.channel.send(
-                embed=embed, view=GiveawayView()
+                embed=embed, view=GiveawayView(self)
             )
             logger.info(
                 "Giveaway started: mid=%s ends=%s winners=%s",
@@ -543,6 +604,5 @@ class Giveaway(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
-    bot.add_view(GiveawayView())
 
     await bot.add_cog(Giveaway(bot))
