@@ -271,11 +271,11 @@ class Leveling(commands.Cog):
                     "Error in daily awards for guild %s (%s)", guild.id, target_date
                 )
 
-        try:
-            await database.reset_daily_xp(target_date)
-            log.info("reset_daily_xp complete for %s", target_date)
-        except Exception:
-            log.exception("Failed to reset daily XP for %s", target_date)
+        # try:
+        #     await database.reset_daily_xp(target_date)
+        #     log.info("reset_daily_xp complete for %s", target_date)
+        # except Exception:
+        #     log.exception("Failed to reset daily XP for %s", target_date)
 
     @app_commands.command(
         name="rank", description="Check your (or someone else's) rank & XP"
@@ -544,6 +544,93 @@ class Leveling(commands.Cog):
             log.exception("rank-reset-colors failed")
             await interaction.followup.send(
                 "Failed to reset colors. Please try again.", ephemeral=True
+            )
+
+    @app_commands.command(
+        name="testdaily", description="Test the daily award for a specific date."
+    )
+    @app_commands.describe(
+        date="The date to test in YYYY-MM-DD format. Defaults to yesterday."
+    )
+    @commands.is_owner()  # <--- CORRECTED LINE
+    async def test_daily_award(
+        self, interaction: discord.Interaction, date: str = None
+    ):
+        """
+        Tests the daily award logic by finding the winner, briefly giving them the role,
+        and then removing it. The response is ephemeral.
+        """
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        # If no date is provided, default to yesterday (ET)
+        target_date = date or (datetime.now(ET) - timedelta(days=1)).strftime(
+            "%Y-%m-%d"
+        )
+        guild = interaction.guild
+
+        try:
+            # 1. Find the top user using the database function
+            top = await database.get_daily_top_user(guild.id, target_date)
+
+            if not top:
+                await interaction.followup.send(
+                    f"❌ No winner found for guild `{guild.name}` on `{target_date}`."
+                )
+                return
+
+            user_id, xp_gain = top
+
+            # 2. Get the role and member objects
+            role = guild.get_role(config.DAILY_XP_ROLE)
+            if not role:
+                await interaction.followup.send(
+                    f"❌ The `DAILY_XP_ROLE` (ID: `{config.DAILY_XP_ROLE}`) was not found in this server."
+                )
+                return
+
+            member = guild.get_member(user_id) or await guild.fetch_member(user_id)
+
+            # 3. Perform the award, wait, and remove
+            await member.add_roles(role, reason=f"Admin test for {target_date}")
+            await interaction.followup.send(
+                f"✅ **Awarding Test:**\n"
+                f"Temporarily gave the `{role.name}` role to **{member.display_name}** "
+                f"for gaining **{xp_gain} XP** on `{target_date}`.\n\n"
+                f"*Removing role in 5 seconds...*"
+            )
+
+            await asyncio.sleep(5)
+
+            await member.remove_roles(role, reason="Admin test complete.")
+
+            # 4. Edit the original message to confirm removal
+            await interaction.edit_original_response(
+                content=(
+                    f"✅ **Test Complete!**\n"
+                    f"Successfully awarded and **removed** the `{role.name}` role from **{member.display_name}**.\n\n"
+                    f"**Winner:** {member.mention} (`{user_id}`)\n"
+                    f"**XP Gained:** `{xp_gain}`\n"
+                    f"**Date:** `{target_date}`"
+                )
+            )
+
+        except discord.NotFound:
+            await interaction.edit_original_response(
+                content=f"❌ **Test Failed:** The winning user (`{user_id}`) "
+                f"could not be found. They may have left the server."
+            )
+        except discord.Forbidden:
+            await interaction.edit_original_response(
+                content=(
+                    f"❌ **PERMISSION ERROR:**\n"
+                    f"I don't have permission to assign the `{role.name}` role. "
+                    f"Please check my role hierarchy and permissions."
+                )
+            )
+        except Exception as e:
+            log.exception("Error during /testdaily command")
+            await interaction.edit_original_response(
+                content=f"An unexpected error occurred: ```{e}```"
             )
 
 
