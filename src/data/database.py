@@ -52,27 +52,16 @@ async def get_daily_top_user(guild_id: int, date: str) -> tuple[int, int] | None
     """Return (user_id, xp_gain) for the ET calendar `date` in this guild, or None."""
 
     def _exec():
-        return (
-            supabase.table("daily_xp")
-            .select("user_id,xp_gain", count="exact")
-            .eq("guild_id", guild_id)
-            .eq("date", date)
-            .order("xp_gain", desc=True)
-            .order("user_id", desc=True)
-            .limit(1)
-            .execute()
-        )
+        return supabase.rpc(
+            "get_daily_top_user", {"p_guild_id": guild_id, "p_date": date}
+        ).execute()
 
     resp = await _db(_exec)
-    logger.debug(
-        "daily_xp count guild=%s date=%s -> %s",
-        guild_id,
-        date,
-        getattr(resp, "count", None),
-    )
+
     if resp.data:
-        r = resp.data[0]
+        r = resp.data
         return int(r["user_id"]), int(r["xp_gain"])
+
     return None
 
 
