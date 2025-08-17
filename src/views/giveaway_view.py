@@ -1,9 +1,8 @@
 # src/views/giveaway_view.py
-
-import asyncio
+from typing import TYPE_CHECKING
 import discord
 from data import database as db
-from typing import TYPE_CHECKING
+
 
 if TYPE_CHECKING:
     from ..cogs.giveaway import Giveaway
@@ -36,4 +35,4 @@ class GiveawayView(discord.ui.View):
         await interaction.followup.send(msg, ephemeral=True)
 
         if success:
-            await self.cog._schedule_update(interaction.message)
+            await self.cog.schedule_update(interaction.message)

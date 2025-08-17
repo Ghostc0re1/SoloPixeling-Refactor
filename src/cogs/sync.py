@@ -1,8 +1,6 @@
 # src/cogs/sync.py
 
-import discord
 from discord.ext import commands
-from discord import app_commands
 
 
 class Syncer(commands.Cog):
@@ -30,7 +28,7 @@ class Syncer(commands.Cog):
         if spec == "^":
             self.bot.tree.clear_commands(guild=ctx.guild)
             await self.bot.tree.sync(guild=ctx.guild)
-            await ctx.send(f"Cleared all commands from this guild and re-synced.")
+            await ctx.send("Cleared all commands from this guild and re-synced.")
             return
 
         synced = await self.bot.tree.sync()

@@ -44,7 +44,7 @@ async def on_app_command_error(
 
     if isinstance(error, app_commands.MissingPermissions):
         await interaction.response.send_message(
-            f"🚫 You lack the required permissions to use this command.", ephemeral=True
+            "🚫 You lack the required permissions to use this command.", ephemeral=True
         )
     elif isinstance(error, app_commands.CommandOnCooldown):
         await interaction.response.send_message(
