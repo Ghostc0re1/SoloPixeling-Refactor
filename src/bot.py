@@ -4,6 +4,7 @@ import os
 import asyncio
 import discord
 from discord.ext import commands
+from discord import app_commands
 
 import config
 
@@ -28,7 +29,41 @@ intents.messages = True
 intents.message_content = True
 intents.members = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = commands.Bot(
+    command_prefix="!",
+    intents=intents,
+    owner_ids={264085720820482048, 194357840176087049},
+)
+
+
+@bot.tree.error
+async def on_app_command_error(
+    interaction: discord.Interaction, error: app_commands.AppCommandError
+):
+    """A global error handler for all slash commands."""
+
+    if isinstance(error, app_commands.MissingPermissions):
+        await interaction.response.send_message(
+            "🚫 You lack the required permissions to use this command.", ephemeral=True
+        )
+    elif isinstance(error, app_commands.CommandOnCooldown):
+        await interaction.response.send_message(
+            f"⏳ This command is on cooldown. Please try again in {error.retry_after:.2f} seconds.",
+            ephemeral=True,
+        )
+    else:
+        # Generic fallback for other errors
+        log.error("Unhandled command error: %s", error)
+        if interaction.response.is_done():
+            await interaction.followup.send(
+                "An unexpected error occurred. Please try again later.", ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                "An unexpected error occurred. Please try again later.", ephemeral=True
+            )
+
+
 logger = get_logger("bot")
 coglog = get_logger("bot.cogs")
 
@@ -37,22 +72,8 @@ coglog = get_logger("bot.cogs")
 async def on_ready():
     """Event that runs when the bot is connected and ready."""
     log.info("Logged in as %s (ID: %s)", bot.user, bot.user.id)
+    log.info("Bot is ready and online!")
     log.info("%s", "-" * 20)
-
-    try:
-        cmd_names = [cmd.name for cmd in bot.tree.get_commands()]
-        logger.info("Commands in tree: %s", cmd_names)
-    except Exception:
-        logger.exception("Failed to list commands in tree")
-
-    try:
-        guild = discord.Object(id=config.GUILD_ID)
-        bot.tree.copy_global_to(guild=guild)
-
-        synced = await bot.tree.sync()
-        logger.info("Synced %s command(s) globally", len(synced))
-    except Exception as e:
-        logger.exception("Failed to sync commands: %s", e)
 
 
 async def load_cogs():

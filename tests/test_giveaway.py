@@ -51,6 +51,7 @@ def interaction(channel, user):
     i.channel = channel
     i.response = MagicMock()
     i.response.send_message = AsyncMock()
+    i.response.defer = AsyncMock()
     i.followup = MagicMock()
     i.followup.send = AsyncMock()
     return i
@@ -81,6 +82,15 @@ def giveaway_row(channel, guild):
 
 
 # -------- Helpers --------
+
+
+class _StubCog:
+    def __init__(self, view):
+        self._view = view
+
+    async def _schedule_update(self, message):
+        # immediate, deterministic “update” for tests
+        await self._view._update_entry_count(message)
 
 
 async def _run_cmd(cog, interaction, **kwargs):

@@ -160,7 +160,7 @@ class Giveaway(commands.Cog):
         finally:
             self._update_tasks.pop(message.id, None)
 
-    async def _schedule_update(self, message: discord.Message):
+    async def schedule_update(self, message: discord.Message):
         """
         Checks if an update task is already running for a message.
         If not, it creates and schedules a new one.
@@ -398,7 +398,7 @@ class Giveaway(commands.Cog):
                         "⚠️ Giveaway setup failed.", ephemeral=True
                     )
                 else:
-                    await interaction.response.send_message(
+                    await interaction.response.defer(
                         "⚠️ Giveaway setup failed.", ephemeral=True
                     )
             except Exception:
