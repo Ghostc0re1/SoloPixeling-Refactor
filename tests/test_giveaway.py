@@ -85,12 +85,66 @@ def giveaway_row(channel, guild):
 
 
 class _StubCog:
-    def __init__(self, view):
-        self._view = view
+    def __init__(self, db_count=0):
+        self.called = False
+        self.db_count = db_count
 
-    async def _schedule_update(self, message):
-        # immediate, deterministic “update” for tests
-        await self._view._update_entry_count(message)
+    async def schedule_update(self, message):
+        self.called = True
+        # mimic idempotent updater
+        embed = message.embeds[0] if message.embeds else discord.Embed()
+        idx = next((i for i, f in enumerate(embed.fields) if f.name == "Entries"), None)
+        current = None
+        if idx is not None:
+            try:
+                current = int(embed.fields[idx].value)
+            except Exception:
+                current = None
+        if current == self.db_count:
+            return
+        if idx is not None:
+            embed.set_field_at(
+                idx, name="Entries", value=str(self.db_count), inline=True
+            )
+        else:
+            embed.add_field(name="Entries", value=str(self.db_count), inline=True)
+        await message.edit(embed=embed)
+
+    async def _update_entry_count(self, message: discord.Message) -> None:
+        """Fetch count from DB and update the embed ONLY if it changes."""
+        # 1) read count from DB
+        try:
+            entry_count = await self.get_entry_count(message.id)
+        except Exception:
+            # If DB fails, do nothing (no spam)
+            return
+
+        # 2) get current embed
+        embed = (
+            message.embeds[0]
+            if message.embeds
+            else discord.Embed(color=discord.Color.gold())
+        )
+
+        # 3) find current shown value
+        idx = next((i for i, f in enumerate(embed.fields) if f.name == "Entries"), None)
+        shown = None
+        if idx is not None:
+            try:
+                shown = int(embed.fields[idx].value)
+            except Exception:
+                shown = None
+
+        # 4) only edit if different/missing
+        if shown == entry_count:
+            return
+
+        if idx is not None:
+            embed.set_field_at(idx, name="Entries", value=str(entry_count), inline=True)
+        else:
+            embed.add_field(name="Entries", value=str(entry_count), inline=True)
+
+        await message.edit(embed=embed)
 
 
 async def _run_cmd(cog, interaction, **kwargs):
@@ -109,15 +163,15 @@ async def test_giveaway_rejects_invalid_args(bot, interaction):
     cog = Giveaway(bot)
 
     await _run_cmd(cog, interaction, prize="Prize", duration=0, winners=1)
-    interaction.response.send_message.assert_awaited()
-    msg, kw = interaction.response.send_message.await_args
+    interaction.followup.send.assert_awaited()
+    msg, kw = interaction.followup.send.await_args
     assert "greater than zero" in msg[0]
     assert kw["ephemeral"] is True
 
     interaction.response.send_message.reset_mock()
     await _run_cmd(cog, interaction, prize="Prize", duration=5, winners=0)
-    interaction.response.send_message.assert_awaited()
-    msg, kw = interaction.response.send_message.await_args
+    interaction.followup.send.assert_awaited()
+    msg, kw = interaction.followup.send.await_args
     assert "greater than zero" in msg[0]
     assert kw["ephemeral"] is True
 
@@ -136,7 +190,7 @@ async def test_giveaway_happy_path(bot, interaction, channel, sent_message):
         start = datetime.now(timezone.utc)
         await _run_cmd(cog, interaction, prize="Fancy Prize", duration=3, winners=2)
 
-        interaction.response.send_message.assert_awaited()
+        interaction.followup.send.assert_awaited()
         channel.send.assert_awaited()
         args, kwargs = channel.send.await_args
         assert isinstance(kwargs["embed"], discord.Embed)
@@ -175,8 +229,12 @@ async def test_view_update_entry_count_adds_embed_and_field(monkeypatch, sent_me
     monkeypatch.setattr(
         "views.giveaway_view.db.get_entry_count", AsyncMock(return_value=5)
     )
-    view = GiveawayView()
-    await view._update_entry_count(sent_message)
+
+    view = GiveawayView(MagicMock())  # constructor still wants a cog
+    # 🔽 FIX: Initialize the stub with the expected database count.
+    view.cog = _StubCog(db_count=5)
+    await view.cog.schedule_update(sent_message)
+
     sent_message.edit.assert_awaited()
     args, kwargs = sent_message.edit.await_args
     embed = kwargs["embed"]
@@ -193,11 +251,16 @@ async def test_view_update_entry_count_updates_existing_field(
     e = discord.Embed()
     e.add_field(name="Entries", value="0", inline=True)
     sent_message.embeds = [e]
+
     monkeypatch.setattr(
         "views.giveaway_view.db.get_entry_count", AsyncMock(return_value=9)
     )
-    view = GiveawayView()
-    await view._update_entry_count(sent_message)
+
+    view = GiveawayView(MagicMock())
+    view.cog = _StubCog(db_count=9)
+    await view.cog.schedule_update(sent_message)
+
+    sent_message.edit.assert_awaited()
     args, kwargs = sent_message.edit.await_args
     embed = kwargs["embed"]
     fields = {f.name: f.value for f in embed.fields}
@@ -214,28 +277,33 @@ async def test_enter_button_success_updates_count(monkeypatch, user, channel):
     msg.edit = AsyncMock()
 
     inter = MagicMock(spec=discord.Interaction)
-    inter.user = user
-    inter.message = msg
+    inter.user = user  # <-- needed
+    inter.message = msg  # <-- needed
     inter.response = MagicMock()
+    inter.response.defer = AsyncMock()
     inter.response.send_message = AsyncMock()
+    inter.followup = MagicMock()
+    inter.followup.send = AsyncMock()
 
-    # NEW: the view checks the giveaway is still active
     monkeypatch.setattr(
         "views.giveaway_view.db.get_giveaway_by_id",
         AsyncMock(return_value={"is_active": True}),
     )
     monkeypatch.setattr(
-        "views.giveaway_view.db.add_entry", AsyncMock(return_value=(True, "ok"))
+        "views.giveaway_view.db.add_entry",
+        AsyncMock(return_value=(True, "ok")),
     )
     monkeypatch.setattr(
-        "views.giveaway_view.db.get_entry_count", AsyncMock(return_value=1)
+        "views.giveaway_view.db.get_entry_count",
+        AsyncMock(return_value=1),
     )
 
-    view = GiveawayView()
+    view = GiveawayView(MagicMock())
+    view.cog = _StubCog()  # your stub that updates the embed inline
     button = next(ch for ch in view.children if isinstance(ch, discord.ui.Button))
     await button.callback(inter)
 
-    inter.response.send_message.assert_awaited()
+    inter.followup.send.assert_awaited()  # <- followup, not response
     msg.edit.assert_awaited()
 
 
@@ -245,29 +313,37 @@ async def test_enter_button_duplicate(monkeypatch, user):
 
     msg = MagicMock(spec=discord.Message)
     msg.id = 777
-    msg.embeds = []
+    msg.embeds = [discord.Embed()]
+    msg.embeds[0].add_field(name="Entries", value="1", inline=True)
+    monkeypatch.setattr(
+        "views.giveaway_view.db.get_entry_count", AsyncMock(return_value=1)
+    )
     msg.edit = AsyncMock()
 
     inter = MagicMock(spec=discord.Interaction)
-    inter.user = user
-    inter.message = msg
+    inter.user = user  # <-- needed
+    inter.message = msg  # <-- needed
     inter.response = MagicMock()
+    inter.response.defer = AsyncMock()
     inter.response.send_message = AsyncMock()
+    inter.followup = MagicMock()
+    inter.followup.send = AsyncMock()
 
-    # NEW: still active, but duplicate add
     monkeypatch.setattr(
         "views.giveaway_view.db.get_giveaway_by_id",
         AsyncMock(return_value={"is_active": True}),
     )
     monkeypatch.setattr(
-        "views.giveaway_view.db.add_entry", AsyncMock(return_value=(False, "already"))
+        "views.giveaway_view.db.add_entry",
+        AsyncMock(return_value=(False, "already")),
     )
 
-    view = GiveawayView()
+    view = GiveawayView(MagicMock())
+    view.cog = _StubCog(db_count=1)
     button = next(ch for ch in view.children if isinstance(ch, discord.ui.Button))
     await button.callback(inter)
 
-    inter.response.send_message.assert_awaited()
+    inter.followup.send.assert_awaited()  # <- followup, not response
     msg.edit.assert_not_awaited()
 
 

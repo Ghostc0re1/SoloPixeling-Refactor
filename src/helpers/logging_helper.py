@@ -28,6 +28,8 @@ def _apply_core_levels(cfg: CogLogging) -> logging.Logger:
     root.setLevel(cfg.level_norm)
     logging.getLogger("discord").setLevel(cfg.discord_level)
     logging.getLogger("asyncio").setLevel("WARNING")
+    logging.getLogger("bot.giveaway").setLevel(logging.DEBUG)
+    logging.getLogger("bot.giveaway.heartbeat").setLevel(logging.DEBUG)
     return root
 
 

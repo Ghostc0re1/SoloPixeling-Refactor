@@ -37,7 +37,7 @@ add_throttle(heartbeat, 300)
 ET = ZoneInfo("America/New_York")
 
 
-class Leveling(commands.Cog):
+class Leveling(commands.Cog, name="Leveling"):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self._last_xp = {}
@@ -271,11 +271,11 @@ class Leveling(commands.Cog):
                     "Error in daily awards for guild %s (%s)", guild.id, target_date
                 )
 
-        # try:
-        #     await database.reset_daily_xp(target_date)
-        #     log.info("reset_daily_xp complete for %s", target_date)
-        # except Exception:
-        #     log.exception("Failed to reset daily XP for %s", target_date)
+        try:
+            await database.reset_daily_xp(target_date)
+            log.info("reset_daily_xp complete for %s", target_date)
+        except Exception:
+            log.exception("Failed to reset daily XP for %s", target_date)
 
     @app_commands.command(
         name="rank", description="Check your (or someone else's) rank & XP"

@@ -52,7 +52,7 @@ async def user_can_run(
     return True
 
 
-class HelpCog(commands.Cog):
+class HelpCog(commands.Cog, name="Help"):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 

@@ -1,5 +1,5 @@
 # database.py
-
+from typing import Callable, TypeVar
 import asyncio
 from datetime import datetime, timezone
 import logging
@@ -18,20 +18,75 @@ from helpers.logging_helper import get_logger
 load_dotenv()
 logger = get_logger("database")
 #
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+url: str = os.getenv("SUPABASE_URL")
+key: str = os.getenv("SUPABASE_ANON_KEY")
+BOT_EMAIL = os.getenv("BOT_EMAIL")
+BOT_PASSWORD = os.getenv("BOT_PASSWORD")
+T = TypeVar("T")
 #
-if not SUPABASE_URL or not SUPABASE_KEY:
+if not url or not key:
     raise ValueError("Supabase URL and Key must be set in the .env file.")
 #
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+supabase: Client = create_client(url, key)
 
 _DB_SEM = asyncio.Semaphore(8)
+
+
+def _extract_access_token(sess) -> str | None:
+    # supabase-py v2 (Pydantic model)
+    if hasattr(sess, "access_token"):
+        return getattr(sess, "access_token")
+    if (
+        hasattr(sess, "session")
+        and getattr(sess, "session") is not None
+        and hasattr(sess.session, "access_token")
+    ):
+        return getattr(sess.session, "access_token")
+
+    if isinstance(sess, dict):
+        return sess.get("access_token") or (sess.get("session") or {}).get(
+            "access_token"
+        )
+
+    return None
+
+
+def _has_valid_session() -> bool:
+    sess = supabase.auth.get_session()
+    return bool(_extract_access_token(sess))
+
+
+def _ensure_session() -> None:
+    if _has_valid_session():
+        return
+    supabase.auth.sign_in_with_password({"email": BOT_EMAIL, "password": BOT_PASSWORD})
+    if not _has_valid_session():
+        raise RuntimeError("Supabase user session missing after login")
 
 
 async def _db(call):
     async with _DB_SEM:
         return await asyncio.to_thread(call)
+
+
+async def _db_authed_async(call: Callable[[], T]) -> T:
+    def _wrapped():
+        _ensure_session()
+        return call()
+
+    return await _db(_wrapped)
+
+
+async def authenticate_bot() -> bool:
+    def _exec():
+        try:
+            _ensure_session()
+            return _has_valid_session()
+        except Exception as e:
+            logger.error("Supabase auth failed: %s", e)
+            return False
+
+    return await _db(_exec)
 
 
 #
@@ -44,7 +99,7 @@ async def increment_daily_xp(user_id: int, guild_id: int, delta: int) -> None:
             {"p_guild_id": guild_id, "p_user_id": user_id, "p_delta": delta},
         ).execute()
 
-    await _db(_exec)
+    await _db_authed_async(_exec)
 
 
 #
@@ -56,7 +111,7 @@ async def get_daily_top_user(guild_id: int, date: str) -> tuple[int, int] | None
             "get_daily_top_user", {"p_guild_id": guild_id, "p_date": date}
         ).execute()
 
-    resp = await _db(_exec)
+    resp = await _db_authed_async(_exec)
 
     if resp.data:
         r = resp.data
@@ -72,7 +127,7 @@ async def reset_daily_xp(date_str: str) -> int:
     def _exec():
         return supabase.rpc("admin_reset_daily_xp", {"p_date": date_str}).execute()
 
-    resp = await _db(_exec)
+    resp = await _db_authed_async(_exec)
     deleted = int(resp.data or 0)
     logger.info("reset_daily_xp(%s) deleted=%s", date_str, deleted)
     return deleted
@@ -89,7 +144,7 @@ async def daily_xp_exists(date: str) -> bool:
             .execute()
         )
 
-    res = await _db(_exec)
+    res = await _db_authed_async(_exec)
     return (getattr(res, "count", None) or 0) > 0 or bool(res.data)
 
 
@@ -129,7 +184,7 @@ async def get_user(user_id: int, guild_id: int):
             .execute()
         )
 
-    response = await _db(_exec)
+    response = await _db_authed_async(_exec)
     if response.data:
         user_data = response.data[0]
         return user_data["xp"], user_data["level"]
@@ -146,7 +201,7 @@ async def set_user_xp_and_level(user_id: int, guild_id: int, xp: int, level: int
             on_conflict="user_id,guild_id",
         ).execute()
 
-    await _db(_exec)
+    await _db_authed_async(_exec)
 
 
 #
@@ -158,7 +213,7 @@ async def get_user_rank(user_id: int, guild_id: int) -> int | None:
             "get_user_rank_in_guild", {"p_guild_id": guild_id, "p_user_id": user_id}
         ).execute()
 
-    resp = await _db(_exec)
+    resp = await _db_authed_async(_exec)
     d = resp.data
     if d is None:
         return None
@@ -184,7 +239,7 @@ async def get_user_profile(user_id: int, guild_id: int) -> dict | None:
             .execute()
         )
 
-    response = await _db(_exec)
+    response = await _db_authed_async(_exec)
     return response.data[0] if response.data else None
 
 
@@ -197,7 +252,7 @@ async def update_user_profile(user_id: int, guild_id: int, settings: dict) -> No
             on_conflict="user_id,guild_id",
         ).execute()
 
-    await _db(_exec)
+    await _db_authed_async(_exec)
 
 
 async def set_profile_colors(
@@ -214,7 +269,7 @@ async def set_profile_colors(
             payload, on_conflict="user_id,guild_id"
         ).execute()
 
-    await _db(_exec)
+    await _db_authed_async(_exec)
 
 
 async def set_profile_banner_path(
@@ -226,7 +281,7 @@ async def set_profile_banner_path(
             on_conflict="user_id,guild_id",
         ).execute()
 
-    await _db(_exec)
+    await _db_authed_async(_exec)
 
 
 async def clear_profile_colors(user_id: int, guild_id: int) -> None:
@@ -242,7 +297,7 @@ async def clear_profile_colors(user_id: int, guild_id: int) -> None:
             on_conflict="user_id,guild_id",
         ).execute()
 
-    await _db(_exec)
+    await _db_authed_async(_exec)
 
 
 #
@@ -261,7 +316,7 @@ async def get_leaderboard(guild_id: int, top: int) -> list[tuple]:
             .execute()
         )
 
-    response = await _db(_exec)
+    response = await _db_authed_async(_exec)
     return [(user["user_id"], user["level"], user["xp"]) for user in response.data]
 
 
@@ -312,7 +367,7 @@ async def set_guild_setting(guild_id: int, settings) -> dict:
     def _exec():
         return supabase.table("guild_settings").upsert(payload).execute()
 
-    return await _db(_exec)
+    return await _db_authed_async(_exec)
 
 
 #
@@ -333,7 +388,7 @@ async def get_all_guild_settings() -> dict:
     def _exec():
         return supabase.table("guild_settings").select("*").execute()
 
-    response = await _db(_exec)
+    response = await _db_authed_async(_exec)
     return {row["guild_id"]: row for row in response.data}
 
 
@@ -362,7 +417,7 @@ async def create_giveaway(
     def _exec():
         supabase.table("giveaways").insert(giveaway_data).execute()
 
-    await _db(_exec)
+    await _db_authed_async(_exec)
 
 
 async def add_entry(giveaway_id: int, user_id: int) -> tuple[bool, str]:
@@ -382,22 +437,20 @@ async def add_entry(giveaway_id: int, user_id: int) -> tuple[bool, str]:
             logger.exception("add_entry failed")
             return (False, "An error occurred while entering the giveaway.")
 
-    return await _db(_exec)
+    return await _db_authed_async(_exec)
 
 
 async def get_entry_count(giveaway_id: int) -> int:
-    """Gets the number of entries for a giveaway."""
-
     def _exec():
         return (
             supabase.table("entries")
-            .select("id", count="exact")
+            .select("id")
             .eq("giveaway_id", giveaway_id)
             .execute()
         )
 
-    response = await _db(_exec)
-    return response.count
+    response = await _db_authed_async(_exec)
+    return len(response.data or [])
 
 
 async def get_active_giveaways() -> list:
@@ -406,7 +459,7 @@ async def get_active_giveaways() -> list:
     def _exec():
         return supabase.table("giveaways").select("*").eq("is_active", True).execute()
 
-    response = await _db(_exec)
+    response = await _db_authed_async(_exec)
     return response.data
 
 
@@ -421,7 +474,7 @@ async def get_giveaway_entrants(giveaway_id: int) -> list[int]:
             .execute()
         )
 
-    response = await _db(_exec)
+    response = await _db_authed_async(_exec)
     return [entry["user_id"] for entry in response.data]
 
 
@@ -437,7 +490,7 @@ async def end_giveaway(message_id: int) -> bool:
             .execute()
         )
 
-    res = await _db(_exec)
+    res = await _db_authed_async(_exec)
     return bool(res.data)
 
 
@@ -453,7 +506,7 @@ async def get_giveaway_by_id(message_id: int) -> dict | None:
             .execute()
         )
 
-    resp = await _db(_exec)
+    resp = await _db_authed_async(_exec)
     return resp.data[0] if resp.data else None
 
 
@@ -470,7 +523,7 @@ async def list_active_giveaways_for_guild(guild_id: int) -> list[dict]:
             .execute()
         )
 
-    resp = await _db(_exec)
+    resp = await _db_authed_async(_exec)
     return resp.data
 
 
@@ -482,7 +535,7 @@ async def set_giveaway_end_time_now(message_id: int) -> None:
             {"end_time": datetime.now(timezone.utc).isoformat()}
         ).eq("message_id", message_id).execute()
 
-    await _db(_exec)
+    await _db_authed_async(_exec)
 
 
 async def get_due_giveaways(now_iso: str) -> list[dict]:
@@ -495,7 +548,7 @@ async def get_due_giveaways(now_iso: str) -> list[dict]:
             .execute()
         )
 
-    resp = await _db(_exec)
+    resp = await _db_authed_async(_exec)
     return resp.data
 
 
@@ -533,7 +586,7 @@ async def upload_rank_banner(
                     },
                 )
 
-    await _db(_exec)
+    await _db_authed_async(_exec)
     return path
 
 
@@ -588,7 +641,7 @@ async def set_rank_banner(
             return _upload_bytes(bucket.update)
 
     # do the storage write
-    resp = await _db(_do_upload_or_update)
+    resp = await _db_authed_async(_do_upload_or_update)
     logging.debug("rank banner storage response: %r", resp)
 
     # persist the pointer
@@ -602,7 +655,7 @@ async def set_rank_banner(
             .execute()
         )
 
-    await _db(_save_path)
+    await _db_authed_async(_save_path)
 
 
 async def remove_rank_banner(
@@ -623,7 +676,7 @@ async def remove_rank_banner(
             .execute()
         )
 
-    resp = await _db(_get)
+    resp = await _db_authed_async(_get)
     current_path = resp.data[0]["banner_path"] if resp.data else None
 
     # Clear pointer
@@ -637,7 +690,7 @@ async def remove_rank_banner(
             .execute()
         )
 
-    await _db(_clear)
+    await _db_authed_async(_clear)
 
     # Delete underlying file if asked and known
     if delete_file and current_path:
@@ -647,7 +700,7 @@ async def remove_rank_banner(
             return supabase.storage.from_("rank-banners").remove([current_path])
 
         try:
-            await _db(_rm)
+            await _db_authed_async(_rm)
         except Exception:
             # don't hard-fail remove: storage cleanup best-effort
             logging.exception("Failed to delete banner file %s", current_path)
