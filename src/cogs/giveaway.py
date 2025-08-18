@@ -22,7 +22,7 @@ heartbeat = get_logger("giveaway.heartbeat")
 add_throttle(heartbeat, 900)
 
 
-class Giveaway(commands.Cog):
+class Giveaway(commands.Cog, name="Giveaway"):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.check_giveaways_loop.start()
@@ -150,7 +150,7 @@ class Giveaway(commands.Cog):
         """
         try:
 
-            await asyncio.sleep(15)
+            await asyncio.sleep(5)
             message = await message.channel.fetch_message(message.id)
             await self._update_entry_count(message)
         except discord.NotFound:
@@ -181,13 +181,19 @@ class Giveaway(commands.Cog):
             else discord.Embed(color=discord.Color.gold())
         )
 
-        # Ensure Entries field exists
-        for i, f in enumerate(embed.fields):
-            if f.name == "Entries":
-                embed.set_field_at(
-                    i, name="Entries", value=str(entry_count), inline=True
-                )
-                break
+        idx = next((i for i, f in enumerate(embed.fields) if f.name == "Entries"), None)
+        shown = None
+        if idx is not None:
+            try:
+                shown = int(embed.fields[idx].value)
+            except Exception:
+                shown = None
+
+        if shown == entry_count:
+            return
+
+        if idx is not None:
+            embed.set_field_at(idx, name="Entries", value=str(entry_count), inline=True)
         else:
             embed.add_field(name="Entries", value=str(entry_count), inline=True)
 
@@ -228,6 +234,12 @@ class Giveaway(commands.Cog):
 
             # 4) Load entrants
             entrant_ids = await db.get_giveaway_entrants(g["message_id"])
+            logger.info(
+                "Finalizing giveaway %s: %d entrants",
+                g["message_id"],
+                len(entrant_ids),
+                extra=ctx,
+            )
 
             # 5) Build a safe embed baseline (even if original had no embeds)
             embed = (
@@ -280,6 +292,12 @@ class Giveaway(commands.Cog):
             # 8) Pick winners
             weights = self._weights_for(entrants)
             winners = self._pick_winners(entrants, weights, int(g["winner_count"]))
+            logger.info(
+                "Picked %d winners for giveaway %s",
+                len(winners),
+                g["message_id"],
+                extra=ctx,
+            )
 
             final_embed = self._build_ended_embed(
                 g, winners, message.embeds[0] if message.embeds else None

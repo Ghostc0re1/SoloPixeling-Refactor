@@ -21,7 +21,7 @@ heartbeat = get_logger("scheduler.heartbeat")
 add_throttle(heartbeat, 900)
 
 
-class Scheduling(commands.Cog):
+class Scheduling(commands.Cog, name="Scheduling"):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.ping_roles.start()

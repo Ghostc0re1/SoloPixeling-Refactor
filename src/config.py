@@ -197,7 +197,7 @@ ROLE_WEIGHTS = {
     1397730019660398662: 2,  # Premium role
 }
 DEFAULT_WEIGHT = 1
-GIVEAWAY_CHECK_INTERVAL = 20
+GIVEAWAY_CHECK_INTERVAL = 5
 # === Leveling System Configuration ===
 DB_PATH = os.path.join(HERE, "leveling.db")
 DEFAULT_XP_RANGE = (5, 15)

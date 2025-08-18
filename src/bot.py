@@ -8,6 +8,7 @@ from discord import app_commands
 
 import config
 
+from data.database import authenticate_bot
 from helpers.logging_helper import get_logger, setup_logging
 from utility.logging_utils import CogLogging
 
@@ -74,6 +75,11 @@ async def on_ready():
     log.info("Logged in as %s (ID: %s)", bot.user, bot.user.id)
     log.info("Bot is ready and online!")
     log.info("%s", "-" * 20)
+    ok = await authenticate_bot()
+    if ok:
+        log.info("✅ Bot authenticated with Supabase")
+    else:
+        log.error("❌ Bot failed to authenticate with Supabase")
 
 
 async def load_cogs():

@@ -30,9 +30,32 @@ class GiveawayView(discord.ui.View):
                 "That giveaway has ended.", ephemeral=True
             )
 
-        success, msg = await db.add_entry(interaction.message.id, interaction.user.id)
+        success, note = await db.add_entry(interaction.message.id, interaction.user.id)
+        await interaction.followup.send(note, ephemeral=True)
 
-        await interaction.followup.send(msg, ephemeral=True)
+        # Optimistic UI only on success
+        if success is True:
+            embed = (
+                interaction.message.embeds[0]
+                if interaction.message.embeds
+                else discord.Embed()
+            )
+            idx = next(
+                (i for i, f in enumerate(embed.fields) if f.name == "Entries"), None
+            )
+            if idx is not None:
+                try:
+                    current = int(embed.fields[idx].value)
+                except Exception:
+                    current = 0
+                embed.set_field_at(
+                    idx, name="Entries", value=str(current + 1), inline=True
+                )
+            else:
+                embed.add_field(name="Entries", value="1", inline=True)
+            try:
+                await interaction.message.edit(embed=embed)
+            except Exception:
+                pass
 
-        if success:
-            await self.cog.schedule_update(interaction.message)
+        await self.cog.schedule_update(interaction.message)
