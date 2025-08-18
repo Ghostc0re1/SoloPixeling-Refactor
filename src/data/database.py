@@ -133,6 +133,25 @@ async def reset_daily_xp(date_str: str) -> int:
     return deleted
 
 
+async def reset_daily_xp_for_guild(guild_id: int, date_str: str) -> int:
+    """Deletes all rows for a specific guild and ET date `date_str`."""
+
+    def _exec():
+        # The RPC function now takes two parameters
+        params = {"p_guild_id": guild_id, "p_date": date_str}
+        return supabase.rpc("admin_reset_daily_xp_for_guild", params).execute()
+
+    resp = await _db_authed_async(_exec)
+    deleted = int(resp.data or 0)
+    logger.info(
+        "reset_daily_xp_for_guild(guild=%s, date=%s) deleted=%s",
+        guild_id,
+        date_str,
+        deleted,
+    )
+    return deleted
+
+
 # Returns True if any daily_xp rows exist for the given date
 async def daily_xp_exists(date: str) -> bool:
     def _exec():

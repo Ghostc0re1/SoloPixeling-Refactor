@@ -203,8 +203,10 @@ class Leveling(commands.Cog, name="Leveling"):
         except Exception:
             log.exception("Failed to announce level up for %s", message.author.id)
 
+    # pylint: disable=too-many-branches
     async def _process_daily_awards_for_date(self, target_date: str):
         log.info("🏁 Processing daily awards for %s", target_date)
+        guild_statuses = {guild.id: False for guild in self.bot.guilds}
         for guild in self.bot.guilds:
             try:
                 top = await database.get_daily_top_user(guild.id, target_date)
@@ -212,6 +214,7 @@ class Leveling(commands.Cog, name="Leveling"):
                     log.info(
                         "No daily_xp rows for guild=%s on %s", guild.id, target_date
                     )
+                    guild_statuses[guild.id] = True
                     continue
 
                 user_id, xp_gain = top
@@ -253,6 +256,8 @@ class Leveling(commands.Cog, name="Leveling"):
                         await ch.send(
                             f"🏆 Congrats {member.mention}: you gained **{xp_gain} XP** on {target_date}!"
                         )
+                        guild_statuses[guild.id] = True
+                        log.info("Award processed successfully for guild %s", guild.id)
                     else:
                         log.warning(
                             "Configured announce channel %s is not a TextChannel in %s",
@@ -265,17 +270,30 @@ class Leveling(commands.Cog, name="Leveling"):
                     "Missing permissions for daily awards in guild %s", guild.id
                 )
             except discord.NotFound:
+                guild_statuses[guild.id] = True
                 continue
             except Exception:
                 log.exception(
                     "Error in daily awards for guild %s (%s)", guild.id, target_date
                 )
 
-        try:
-            await database.reset_daily_xp(target_date)
-            log.info("reset_daily_xp complete for %s", target_date)
-        except Exception:
-            log.exception("Failed to reset daily XP for %s", target_date)
+        log.info("Starting cleanup phase...")
+        for guild_id, was_successful in guild_statuses.items():
+            if was_successful:
+                try:
+                    await database.reset_daily_xp_for_guild(guild_id, target_date)
+                    log.info("Data reset for successfully processed guild %s", guild_id)
+                except Exception:
+                    log.exception(
+                        "Failed to reset daily XP for guild %s on %s",
+                        guild_id,
+                        target_date,
+                    )
+            else:
+                log.warning(
+                    "Skipping data reset for guild %s because it was not processed successfully.",
+                    guild_id,
+                )
 
     @app_commands.command(
         name="rank", description="Check your (or someone else's) rank & XP"
