@@ -24,6 +24,7 @@ from helpers import banner_helper
 from helpers.level_helper import fetch_banner_bytes
 from helpers.logging_helper import get_logger, add_throttle
 from data import database
+from views.confirmation_view import ConfirmView
 from views.leaderboard_view import LeaderboardView
 
 
@@ -650,6 +651,35 @@ class Leveling(commands.Cog, name="Leveling"):
             await interaction.edit_original_response(
                 content=f"An unexpected error occurred: ```{e}```"
             )
+
+    @app_commands.command(
+        name="testdailydelete",
+        description="Tests the daily XP data deletion for a specific date.",
+    )
+    @commands.is_owner()
+    async def test_daily_delete(
+        self, interaction: discord.Interaction, date: str = None
+    ):
+        """
+        Tests the daily XP data deletion for a given date.
+        Requires confirmation before proceeding.
+        """
+        # If no date is provided, default to yesterday (ET)
+        target_date = date or (datetime.now(ET) - timedelta(days=1)).strftime(
+            "%Y-%m-%d"
+        )
+        guild = interaction.guild
+
+        # Create an instance of the confirmation view
+        view = ConfirmView(guild_id=guild.id, date_str=target_date)
+
+        # Send the confirmation message
+        await interaction.response.send_message(
+            f"🚨 **Are you sure you want to delete all daily XP data on `{guild}` for `{target_date}`?**\n"
+            "This action cannot be undone.",
+            view=view,
+            ephemeral=True,
+        )
 
 
 async def setup(bot: commands.Bot):
