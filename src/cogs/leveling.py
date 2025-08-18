@@ -571,7 +571,7 @@ class Leveling(commands.Cog, name="Leveling"):
     @app_commands.describe(
         date="The date to test in YYYY-MM-DD format. Defaults to yesterday."
     )
-    @commands.is_owner()  # <--- CORRECTED LINE
+    @commands.is_owner()
     async def test_daily_award(
         self, interaction: discord.Interaction, date: str = None
     ):
