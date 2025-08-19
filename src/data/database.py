@@ -120,6 +120,63 @@ async def get_daily_top_user(guild_id: int, date: str) -> tuple[int, int] | None
     return None
 
 
+# ---------- Outbox: stage a winner (UPSERT) ----------
+async def stage_daily_award(
+    guild_id: int, target_date: str, user_id: int, xp_gain: int, channel_id: int | None
+) -> dict:
+    payload = {"channel_id": channel_id}
+
+    def _exec():
+        return supabase.rpc(
+            "stage_daily_award",
+            {
+                "p_guild_id": guild_id,
+                "p_target_date": target_date,  # 'YYYY-MM-DD'
+                "p_user_id": user_id,
+                "p_xp_gain": xp_gain,
+                "p_payload": payload,
+            },
+        ).execute()
+
+    resp = await _db_authed_async(_exec)
+    return resp.data or {}
+
+
+# ---------- Outbox: list pending (announced_at IS NULL) ----------
+async def list_outbox_pending(limit: int = 50) -> list[dict]:
+    # If you exposed a dedicated RPC, use it; otherwise query the table.
+    def _exec():
+        return (
+            supabase.table("daily_award_outbox")
+            .select("*")
+            .is_("announced_at", None)
+            .order("created_at", desc=False)
+            .limit(limit)
+            .execute()
+        )
+
+    res = await _db_authed_async(_exec)
+    return res.data or []
+
+
+# ---------- Outbox: mark announced (stores message_id, sets announced_at) ----------
+async def mark_award_announced(
+    guild_id: int, target_date: str, message_id: int
+) -> dict:
+    def _exec():
+        return supabase.rpc(
+            "mark_award_announced",
+            {
+                "p_guild_id": guild_id,
+                "p_target_date": target_date,
+                "p_message_id": message_id,
+            },
+        ).execute()
+
+    resp = await _db_authed_async(_exec)
+    return resp.data or {}
+
+
 #
 async def reset_daily_xp(date_str: str) -> int:
     """Deletes all rows for ET date `date_str` via SECURITY DEFINER RPC. Returns deleted count."""
@@ -147,6 +204,25 @@ async def reset_daily_xp_for_guild(guild_id: int, date_str: str) -> int:
         "reset_daily_xp_for_guild(guild=%s, date=%s) deleted=%s",
         guild_id,
         date_str,
+        deleted,
+    )
+    return deleted
+
+
+# ---------- Cleanup: ONLY if announced_at is set ----------
+async def reset_daily_xp_after_announce(guild_id: int, target_date: str) -> int:
+    def _exec():
+        return supabase.rpc(
+            "reset_daily_xp_after_announce",
+            {"p_guild_id": guild_id, "p_target_date": target_date},
+        ).execute()
+
+    resp = await _db_authed_async(_exec)
+    deleted = int(resp.data or 0)
+    logger.info(
+        "reset_daily_xp_after_announce(guild=%s, date=%s) deleted=%s",
+        guild_id,
+        target_date,
         deleted,
     )
     return deleted
