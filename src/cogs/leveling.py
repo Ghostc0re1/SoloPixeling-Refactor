@@ -45,24 +45,31 @@ class Leveling(commands.Cog, name="Leveling"):
         self.guild_cooldowns = {}
         self.guild_xp_ranges = {}
         self.guild_levelup_channels = {}
-        self._awards_started = False
+        self.daily_award_stage_task.start()
+        self.drain_award_outbox.start()
 
     async def cog_unload(self):
-        try:
-            if self.daily_award_task.is_running():
-                self.daily_award_task.cancel()
-        except Exception:
-            log.exception("Failed to unload daily_award_task")
+        # Cancel both loops on unload/reload
+        for loop_task in (
+            getattr(self, "daily_award_stage_task", None),
+            getattr(self, "drain_award_outbox", None),
+        ):
+            try:
+                if loop_task and loop_task.is_running():
+                    loop_task.cancel()
+            except Exception:
+                log.exception(
+                    "Failed to cancel loop %s", getattr(loop_task, "__name__", "<loop>")
+                )
 
     @commands.Cog.listener()
     async def on_ready(self):
         """Load all settings from the database on startup."""
-
-        # Cooldowns
         try:
             self.guild_cooldowns = await database.get_all_cooldowns()
             self.guild_xp_ranges = await database.get_all_xp_ranges()
             log.info("Loaded XP ranges for %d guilds.", len(self.guild_xp_ranges))
+
             all_channel_settings = await database.get_all_channel_settings()
             for guild_id, settings in all_channel_settings.items():
                 if settings.get("levelup"):
@@ -73,21 +80,17 @@ class Leveling(commands.Cog, name="Leveling"):
             )
             log.info("Loaded cooldowns for %d guilds.", len(self.guild_cooldowns))
 
-            if not self._awards_started:
-                self.daily_award_task.start()
-                self._awards_started = True
-
-                ystr = (datetime.now(ET).date() - timedelta(days=1)).isoformat()
-                if await database.daily_xp_exists(ystr):
-                    log.info(
-                        "🔄 Catch-up: daily_xp present for %s, processing now.", ystr
-                    )
-                    await self._process_daily_awards_for_date(ystr)
-                else:
-                    log.info(
-                        "✅ Catch-up: no daily_xp rows for %s (already processed/reset).",
-                        ystr,
-                    )
+            # Catch-up (optional): if yesterday has rows, stage & immediately try to drain once.
+            ystr = (datetime.now(ET).date() - timedelta(days=1)).isoformat()
+            if await database.daily_xp_exists(ystr):
+                log.info(
+                    "🔄 Catch-up: daily_xp present for %s, staging & draining once.",
+                    ystr,
+                )
+                await self.stage_awards_for_date(ystr)
+                await self._drain_award_outbox_once()
+            else:
+                log.info("✅ Catch-up: no daily_xp rows for %s.", ystr)
 
         except Exception:
             log.exception("Failed to load leveling settings on_ready")
@@ -205,96 +208,131 @@ class Leveling(commands.Cog, name="Leveling"):
             log.exception("Failed to announce level up for %s", message.author.id)
 
     # pylint: disable=too-many-branches
-    async def _process_daily_awards_for_date(self, target_date: str):
-        log.info("🏁 Processing daily awards for %s", target_date)
-        guild_statuses = {guild.id: False for guild in self.bot.guilds}
+    async def stage_awards_for_date(self, target_date: str) -> None:
         for guild in self.bot.guilds:
+            top = await database.get_daily_top_user(guild.id, target_date)
+            if not top:
+                log.info("No daily_xp rows for guild=%s on %s", guild.id, target_date)
+                continue
+
+            user_id, xp_gain = top
+            chan_id = getattr(config, "DAILY_ANNOUNCE_CHANNEL", {}).get(guild.id)
+            await database.stage_daily_award(
+                guild.id, target_date, user_id, xp_gain, chan_id
+            )
+            log.info(
+                "Staged award: guild=%s date=%s user=%s xp=%s",
+                guild.id,
+                target_date,
+                user_id,
+                xp_gain,
+            )
+
+    async def _drain_award_outbox_once(self) -> None:
+        for row in await database.list_outbox_pending():
+            guild_id = int(row["guild_id"])
+            target_date = str(row["target_date"])
+            user_id = int(row["user_id"])
+            xp_gain = int(row["xp_gain"])
+            chan_id = (row.get("payload") or {}).get("channel_id")
+
+            guild = self.bot.get_guild(guild_id)
+            if not guild:
+                continue
+
+            # Best-effort role ops
             try:
-                top = await database.get_daily_top_user(guild.id, target_date)
-                if not top:
-                    log.info(
-                        "No daily_xp rows for guild=%s on %s", guild.id, target_date
-                    )
-                    guild_statuses[guild.id] = True
-                    continue
-
-                user_id, xp_gain = top
                 role = guild.get_role(config.DAILY_XP_ROLE)
-                if not role:
-                    log.warning("DAILY_XP_ROLE not found in guild=%s", guild.id)
-                    continue
+                if role:
+                    for holder in list(role.members):
+                        try:
+                            await holder.remove_roles(
+                                role, reason=f"Daily XP reset {target_date}"
+                            )
+                        except Exception:
+                            log.warning(
+                                "Role remove failed for %s in %s", holder.id, guild_id
+                            )
 
-                member = guild.get_member(user_id) or await guild.fetch_member(user_id)
-
-                for m in list(role.members):
                     try:
-                        await m.remove_roles(
-                            role, reason=f"Daily XP reset {target_date}"
+                        member = guild.get_member(user_id) or await guild.fetch_member(
+                            user_id
                         )
-                    except discord.Forbidden:
+                        if role not in member.roles:
+                            await member.add_roles(
+                                role, reason=f"Most XP on {target_date}: {xp_gain}"
+                            )
+                    except Exception:
                         log.warning(
-                            "No perms removing role from %s in %s", m.id, guild.id
+                            "Winner fetch/add failed for %s in %s", user_id, guild_id
                         )
-                    except discord.HTTPException as e:
-                        log.warning(
-                            "HTTP error removing role from %s in %s: %s",
-                            m.id,
-                            guild.id,
-                            e,
-                        )
+            except Exception:
+                log.warning("Role ops skipped for guild=%s due to error", guild_id)
 
-                if role not in member.roles:
-                    await member.add_roles(
-                        role, reason=f"Most XP on {target_date}: {xp_gain}"
-                    )
-
-                chan_id = config.DAILY_ANNOUNCE_CHANNEL.get(guild.id)
+            # Announce
+            msg_id = 0
+            try:
                 if chan_id:
                     ch = guild.get_channel(chan_id) or await self.bot.fetch_channel(
                         chan_id
                     )
                     if isinstance(ch, discord.TextChannel):
-                        await ch.send(
-                            f"🏆 Congrats {member.mention}: you gained **{xp_gain} XP** on {target_date}!"
+                        msg = await ch.send(
+                            f"🏆 Congrats <@{user_id}>: you gained **{xp_gain} XP** on {target_date}!"
                         )
-                        guild_statuses[guild.id] = True
-                        log.info("Award processed successfully for guild %s", guild.id)
+                        msg_id = msg.id
                     else:
                         log.warning(
-                            "Configured announce channel %s is not a TextChannel in %s",
+                            "Configured channel %s not a TextChannel in %s",
                             chan_id,
-                            guild.id,
+                            guild_id,
                         )
-
-            except discord.Forbidden:
-                log.warning(
-                    "Missing permissions for daily awards in guild %s", guild.id
-                )
-            except discord.NotFound:
-                guild_statuses[guild.id] = True
-                continue
+                else:
+                    log.warning("No announce channel configured for guild=%s", guild_id)
             except Exception:
                 log.exception(
-                    "Error in daily awards for guild %s (%s)", guild.id, target_date
+                    "Announcement failed for guild=%s date=%s", guild_id, target_date
                 )
+                continue  # leave pending; retry next loop
 
-        log.info("Starting cleanup phase...")
-        for guild_id, was_successful in guild_statuses.items():
-            if was_successful:
-                try:
-                    await database.reset_daily_xp_for_guild(guild_id, target_date)
-                    log.info("Data reset for successfully processed guild %s", guild_id)
-                except Exception:
-                    log.exception(
-                        "Failed to reset daily XP for guild %s on %s",
-                        guild_id,
-                        target_date,
-                    )
-            else:
-                log.warning(
-                    "Skipping data reset for guild %s because it was not processed successfully.",
-                    guild_id,
+            # Mark announced and then cleanup (gated by announced_at)
+            try:
+                await database.mark_award_announced(guild_id, target_date, msg_id)
+                deleted = await database.reset_daily_xp_after_announce(
+                    guild_id, target_date
                 )
+                log.info(
+                    "Announced and reset guild=%s date=%s (deleted=%s)",
+                    guild_id,
+                    target_date,
+                    deleted,
+                )
+            except Exception:
+                log.exception(
+                    "Post-announce DB ops failed for guild=%s date=%s",
+                    guild_id,
+                    target_date,
+                )
+                # It was announced but not reset; next pass will only run reset since announced_at is set.
+
+    @tasks.loop(time=dt_time(0, 0, tzinfo=ET))
+    async def daily_award_stage_task(self):
+        target_date = (datetime.now(ET) - timedelta(days=1)).date().isoformat()
+        log.info("⏰ daily_award_stage_task tick for %s", target_date)
+        await self.stage_awards_for_date(target_date)
+
+    @daily_award_stage_task.before_loop
+    async def before_daily_award_stage(self):
+        await self.bot.wait_until_ready()
+
+    @tasks.loop(minutes=2)
+    async def drain_award_outbox(self):
+        await self._drain_award_outbox_once()
+
+    @drain_award_outbox.before_loop
+    async def before_drain_award_outbox(self):
+        await self.bot.wait_until_ready()
+        await self._drain_award_outbox_once()
 
     @app_commands.command(
         name="rank", description="Check your (or someone else's) rank & XP"
@@ -378,16 +416,6 @@ class Leveling(commands.Cog, name="Leveling"):
                 "Could not retrieve the leaderboard. Please try again later.",
                 ephemeral=True,
             )
-
-    @tasks.loop(time=dt_time(0, 0, tzinfo=ET))
-    async def daily_award_task(self):
-        target_date = (datetime.now(ET) - timedelta(days=1)).strftime("%Y-%m-%d")
-        log.info("⏰ daily_award_task tick for %s", target_date)
-        await self._process_daily_awards_for_date(target_date)
-
-    @daily_award_task.before_loop
-    async def before_daily_award(self):
-        await self.bot.wait_until_ready()
 
     def _is_hex(self, s: str) -> bool:
         return (
@@ -565,121 +593,145 @@ class Leveling(commands.Cog, name="Leveling"):
                 "Failed to reset colors. Please try again.", ephemeral=True
             )
 
+    @staticmethod
+    def _parse_date_or_yesterday_et(s: str | None) -> str:
+        if s:
+            try:
+                datetime.strptime(s, "%Y-%m-%d")  # strict check
+                return s
+            except ValueError:
+                raise ValueError("Date must be in YYYY-MM-DD format.")
+        return (datetime.now(ET) - timedelta(days=1)).date().isoformat()
+
     @app_commands.command(
         name="testdaily", description="Test the daily award for a specific date."
     )
     @app_commands.describe(
-        date="The date to test in YYYY-MM-DD format. Defaults to yesterday."
+        date="The date to test in YYYY-MM-DD format. Defaults to yesterday (ET)."
     )
     @commands.is_owner()
     async def test_daily_award(
-        self, interaction: discord.Interaction, date: str = None
+        self, interaction: discord.Interaction, date: Optional[str] = None
     ):
-        """
-        Tests the daily award logic by finding the winner, briefly giving them the role,
-        and then removing it. The response is ephemeral.
-        """
+        """Dry-run: briefly give/remove the DAILY_XP_ROLE to yesterday's winner."""
         await interaction.response.defer(ephemeral=True, thinking=True)
 
-        # If no date is provided, default to yesterday (ET)
-        target_date = date or (datetime.now(ET) - timedelta(days=1)).strftime(
-            "%Y-%m-%d"
-        )
-        guild = interaction.guild
-
         try:
-            # 1. Find the top user using the database function
-            top = await database.get_daily_top_user(guild.id, target_date)
-
-            if not top:
-                await interaction.followup.send(
-                    f"❌ No winner found for guild `{guild.name}` on `{target_date}`."
+            target_date = self._parse_date_or_yesterday_et(date)
+            guild = interaction.guild
+            if guild is None:
+                return await interaction.edit_original_response(
+                    content="❌ This command must be run in a server."
                 )
-                return
+
+            # Find winner
+            top = await database.get_daily_top_user(guild.id, target_date)
+            if not top:
+                return await interaction.edit_original_response(
+                    content=f"❌ No winner found for **{guild.name}** on `{target_date}`."
+                )
 
             user_id, xp_gain = top
 
-            # 2. Get the role and member objects
+            # Resolve role
             role = guild.get_role(config.DAILY_XP_ROLE)
             if not role:
-                await interaction.followup.send(
-                    f"❌ The `DAILY_XP_ROLE` (ID: `{config.DAILY_XP_ROLE}`) was not found in this server."
+                return await interaction.edit_original_response(
+                    content=f"❌ `DAILY_XP_ROLE` not found (ID `{config.DAILY_XP_ROLE}`)."
                 )
-                return
 
-            member = guild.get_member(user_id) or await guild.fetch_member(user_id)
+            # Resolve member (may have left)
+            member = guild.get_member(user_id)
+            if member is None:
+                try:
+                    member = await guild.fetch_member(user_id)
+                except discord.NotFound:
+                    # Still report winner by ID/mention fallback
+                    return await interaction.edit_original_response(
+                        content=(
+                            "❌ **Test Failed:** The winning user is no longer in this server.\n"
+                            f"**Winner (ID):** `{user_id}`\n"
+                            f"**XP Gained:** `{xp_gain}`\n"
+                            f"**Date:** `{target_date}`"
+                        )
+                    )
 
-            # 3. Perform the award, wait, and remove
+            # Award briefly
             await member.add_roles(role, reason=f"Admin test for {target_date}")
             await interaction.followup.send(
-                f"✅ **Awarding Test:**\n"
-                f"Temporarily gave the `{role.name}` role to **{member.display_name}** "
-                f"for gaining **{xp_gain} XP** on `{target_date}`.\n\n"
-                f"*Removing role in 5 seconds...*"
+                f"✅ **Awarding Test**\n"
+                f"Gave `{role.name}` to **{member.display_name}** "
+                f"for **{xp_gain} XP** on `{target_date}`.\n"
+                f"*Removing role in 5 seconds…*",
+                ephemeral=True,
             )
-
             await asyncio.sleep(5)
-
             await member.remove_roles(role, reason="Admin test complete.")
 
-            # 4. Edit the original message to confirm removal
+            # Final summary
             await interaction.edit_original_response(
                 content=(
-                    f"✅ **Test Complete!**\n"
-                    f"Successfully awarded and **removed** the `{role.name}` role from **{member.display_name}**.\n\n"
-                    f"**Winner:** {member.mention} (`{user_id}`)\n"
+                    "✅ **Test Complete!**\n"
+                    f"Temporarily awarded and removed `{role.name}` from **{member.display_name}**.\n\n"
+                    f"**Winner:** <@{user_id}> (`{user_id}`)\n"
                     f"**XP Gained:** `{xp_gain}`\n"
                     f"**Date:** `{target_date}`"
                 )
             )
 
-        except discord.NotFound:
-            await interaction.edit_original_response(
-                content=f"❌ **Test Failed:** The winning user (`{user_id}`) "
-                f"could not be found. They may have left the server."
-            )
+        except ValueError as ve:
+            await interaction.edit_original_response(content=f"❌ {ve}")
         except discord.Forbidden:
             await interaction.edit_original_response(
                 content=(
-                    f"❌ **PERMISSION ERROR:**\n"
-                    f"I don't have permission to assign the `{role.name}` role. "
-                    f"Please check my role hierarchy and permissions."
+                    "❌ **PERMISSION ERROR**\n"
+                    f"I can’t assign `{getattr(role, 'name', 'DAILY_XP_ROLE')}`. "
+                    "Check my role hierarchy and permissions."
                 )
             )
         except Exception as e:
             log.exception("Error during /testdaily command")
             await interaction.edit_original_response(
-                content=f"An unexpected error occurred: ```{e}```"
+                content=f"Unexpected error: ```{e}```"
             )
 
     @app_commands.command(
         name="testdailydelete",
-        description="Tests the daily XP data deletion for a specific date.",
+        description="Test deletion of daily XP data for a specific date (with confirmation).",
     )
     @commands.is_owner()
     async def test_daily_delete(
-        self, interaction: discord.Interaction, date: str = None
+        self, interaction: discord.Interaction, date: Optional[str] = None
     ):
-        """
-        Tests the daily XP data deletion for a given date.
-        Requires confirmation before proceeding.
-        """
-        # If no date is provided, default to yesterday (ET)
-        target_date = date or (datetime.now(ET) - timedelta(days=1)).strftime(
-            "%Y-%m-%d"
-        )
-        guild = interaction.guild
+        """Shows a confirm dialog; the view should call the announced-gated reset RPC."""
+        try:
+            target_date = self._parse_date_or_yesterday_et(date)
+            guild = interaction.guild
+            if guild is None:
+                return await interaction.response.send_message(
+                    "❌ This command must be run in a server.", ephemeral=True
+                )
 
-        # Create an instance of the confirmation view
-        view = ConfirmView(guild_id=guild.id, date_str=target_date)
-
-        # Send the confirmation message
-        await interaction.response.send_message(
-            f"🚨 **Are you sure you want to delete all daily XP data on `{guild}` for `{target_date}`?**\n"
-            "This action cannot be undone.",
-            view=view,
-            ephemeral=True,
-        )
+            view = ConfirmView(
+                guild_id=guild.id, date_str=target_date, author_id=interaction.user.id
+            )
+            message = await interaction.response.send_message(
+                f"🚨 **Confirm deletion of daily XP on `{guild}` for `{target_date}`?**\n"
+                "This will only succeed if the daily winner was **successfully announced**.",
+                view=view,
+                ephemeral=True,
+            )
+            try:
+                view.message = await interaction.original_response()
+            except Exception:
+                pass
+        except ValueError as ve:
+            await interaction.response.send_message(f"❌ {ve}", ephemeral=True)
+        except Exception:
+            log.exception("Error during /testdailydelete command")
+            await interaction.response.send_message(
+                "Unexpected error opening confirmation.", ephemeral=True
+            )
 
 
 async def setup(bot: commands.Bot):
