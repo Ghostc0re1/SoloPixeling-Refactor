@@ -39,14 +39,37 @@ ET = ZoneInfo("America/New_York")
 
 
 class Leveling(commands.Cog, name="Leveling"):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: commands.Bot, *, auto_start_loops: bool = True):
         self.bot = bot
         self._last_xp = {}
         self.guild_cooldowns = {}
         self.guild_xp_ranges = {}
         self.guild_levelup_channels = {}
+
+        # background loop state
+        self._loops_started = False
+        self._start_on_ready = False
+
+        if auto_start_loops:
+            self._try_start_background_tasks()
+
+    def _try_start_background_tasks(self) -> None:
+        """Start loops only if an event loop is already running; otherwise defer."""
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            # No running loop (e.g., during unit test object construction) → defer.
+            self._start_on_ready = True
+            return
+        self._start_background_tasks()
+
+    def _start_background_tasks(self) -> None:
+        if self._loops_started:
+            return
+        # these are @tasks.loop-decorated objects created at class load time
         self.daily_award_stage_task.start()
         self.drain_award_outbox.start()
+        self._loops_started = True
 
     async def cog_unload(self):
         # Cancel both loops on unload/reload
@@ -65,6 +88,9 @@ class Leveling(commands.Cog, name="Leveling"):
     @commands.Cog.listener()
     async def on_ready(self):
         """Load all settings from the database on startup."""
+        if self._start_on_ready and not self._loops_started:
+            self._start_background_tasks()
+
         try:
             self.guild_cooldowns = await database.get_all_cooldowns()
             self.guild_xp_ranges = await database.get_all_xp_ranges()
@@ -599,8 +625,8 @@ class Leveling(commands.Cog, name="Leveling"):
             try:
                 datetime.strptime(s, "%Y-%m-%d")  # strict check
                 return s
-            except ValueError:
-                raise ValueError("Date must be in YYYY-MM-DD format.")
+            except ValueError as exc:
+                raise ValueError("Date must be in YYYY-MM-DD format.") from exc
         return (datetime.now(ET) - timedelta(days=1)).date().isoformat()
 
     @app_commands.command(
@@ -715,12 +741,12 @@ class Leveling(commands.Cog, name="Leveling"):
             view = ConfirmView(
                 guild_id=guild.id, date_str=target_date, author_id=interaction.user.id
             )
-            message = await interaction.response.send_message(
-                f"🚨 **Confirm deletion of daily XP on `{guild}` for `{target_date}`?**\n"
-                "This will only succeed if the daily winner was **successfully announced**.",
-                view=view,
-                ephemeral=True,
-            )
+            # message = await interaction.response.send_message(
+            #     f"🚨 **Confirm deletion of daily XP on `{guild}` for `{target_date}`?**\n"
+            #     "This will only succeed if the daily winner was **successfully announced**.",
+            #     view=view,
+            #     ephemeral=True,
+            # )
             try:
                 view.message = await interaction.original_response()
             except Exception:

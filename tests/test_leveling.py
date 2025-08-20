@@ -361,7 +361,7 @@ async def test_leaderboard_happy_path(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_daily_award_task_assigns_and_announces(cog):
+async def test_daily_award_stage_task_assigns_and_announces(cog):
     # bot with one guild
     guild = MagicMock(spec=discord.Guild)
     guild.id = 1234
@@ -377,7 +377,7 @@ def disable_daily_loop(monkeypatch):
 
     def wrapped(self, bot):
         orig_init(self, bot)
-        self.daily_award_task.start = lambda: None
-        self.daily_award_task.cancel = lambda: None
+        self.daily_award_stage_task.start = lambda: None
+        self.daily_award_stage_task.cancel = lambda: None
 
     monkeypatch.setattr(Leveling, "__init__", wrapped)
