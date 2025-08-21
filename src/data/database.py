@@ -1,6 +1,7 @@
 # database.py
+import time
 from typing import Callable, TypeVar
-import asyncio
+import httpx, httpcore, random, asyncio
 from datetime import datetime, timezone
 import logging
 import os
@@ -30,6 +31,15 @@ if not url or not key:
 supabase: Client = create_client(url, key)
 
 _DB_SEM = asyncio.Semaphore(8)
+
+_TRANSIENT = (
+    httpx.ReadError,
+    httpx.RemoteProtocolError,
+    httpx.ConnectError,
+    httpx.TimeoutException,
+    httpcore.ReadError,
+    httpcore.TimeoutException,
+)
 
 
 def _extract_access_token(sess) -> str | None:
@@ -66,7 +76,7 @@ def _ensure_session() -> None:
 
 async def _db(call):
     async with _DB_SEM:
-        return await asyncio.to_thread(call)
+        return await asyncio.wait_for(asyncio.to_thread(call), timeout=20.0)
 
 
 async def _db_authed_async(call: Callable[[], T]) -> T:
@@ -75,6 +85,24 @@ async def _db_authed_async(call: Callable[[], T]) -> T:
         return call()
 
     return await _db(_wrapped)
+
+
+def _retry_sync(
+    call, *, retries: int = 4, base: float = 0.35, factor: float = 2.0, cap: float = 5.0
+):
+    """
+    Minimal sync retry with backoff+jitter for transient httpx/httpcore blips.
+    Runs inside the worker thread created by _db/_db_authed_async.
+    """
+    delay = base
+    for attempt in range(retries):
+        try:
+            return call()
+        except _TRANSIENT as e:
+            if attempt == retries - 1:
+                raise
+            time.sleep(min(delay, cap) + random.uniform(0.0, 0.25))
+            delay *= factor
 
 
 async def authenticate_bot() -> bool:
@@ -635,8 +663,8 @@ async def set_giveaway_end_time_now(message_id: int) -> None:
 
 async def get_due_giveaways(now_iso: str) -> list[dict]:
     def _exec():
-        return (
-            supabase.table("giveaways")
+        return _retry_sync(
+            lambda: supabase.table("giveaways")
             .select("*")
             .eq("is_active", True)
             .lte("end_time", now_iso)
