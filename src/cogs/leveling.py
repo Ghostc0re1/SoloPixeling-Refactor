@@ -304,7 +304,8 @@ class Leveling(commands.Cog, name="Leveling"):
                     )
                     if isinstance(ch, discord.TextChannel):
                         msg = await ch.send(
-                            f"🏆 Congrats <@{user_id}>: you gained **{xp_gain} XP** on {target_date}!"
+                            f"🏆 Congrats <@{user_id}>: you gained the most XP today with **{xp_gain} XP**!"
+                            f"You have been awarded: **{role.name}**"
                         )
                         msg_id = msg.id
                     else:
