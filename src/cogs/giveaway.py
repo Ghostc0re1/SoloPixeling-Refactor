@@ -208,6 +208,7 @@ class Giveaway(commands.Cog, name="Giveaway"):
         - Compute winners from DB entrants
         - Edit embed robustly (works even if original embed is gone)
         """
+        ctx = {}
         try:
 
             ctx = {"gid": g["guild_id"], "cid": g["channel_id"], "mid": g["message_id"]}
@@ -427,15 +428,19 @@ class Giveaway(commands.Cog, name="Giveaway"):
     # --- BACKGROUND TASK FOR ENDING GIVEAWAYS ---
     @tasks.loop(seconds=config.GIVEAWAY_CHECK_INTERVAL)
     async def check_giveaways_loop(self):
-        now = datetime.now(timezone.utc)
-        due = await db.get_due_giveaways(now.isoformat())
-        heartbeat.debug("due=%d at %s", len(due), now.isoformat())
-        for g in due:
-            await self.process_ended_giveaway(g)
+        try:
+            now = datetime.now(timezone.utc)
+            due = await db.get_due_giveaways(now.isoformat())
+            heartbeat.debug("due=%d at %s", len(due), now.isoformat())
+            for g in due:
+                await self.process_ended_giveaway(g)
+        except Exception:
+            logger.exception("check_giveaways_loop error (kept alive)")
 
     @check_giveaways_loop.before_loop
     async def _before_loop(self):
         await self.bot.wait_until_ready()
+        await asyncio.sleep(random.uniform(0.0, 0.4))
 
     @app_commands.command(
         name="giveaway-end",
