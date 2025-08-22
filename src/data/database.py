@@ -1,11 +1,14 @@
 # database.py
 import time
 from typing import Callable, TypeVar
-import httpx, httpcore, random, asyncio
+import random
+import asyncio
 from datetime import datetime, timezone
 import logging
 import os
 import tempfile
+import httpx
+import httpcore
 import discord
 from dotenv import load_dotenv
 from supabase import create_client, Client
@@ -100,9 +103,10 @@ def _retry_sync(
             return call()
         except _TRANSIENT as e:
             if attempt == retries - 1:
-                raise
+                raise e
             time.sleep(min(delay, cap) + random.uniform(0.0, 0.25))
             delay *= factor
+    return None
 
 
 async def authenticate_bot() -> bool:
