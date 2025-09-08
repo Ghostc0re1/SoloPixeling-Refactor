@@ -13,9 +13,11 @@ from cogs.events import Events
 
 @pytest.fixture
 def bot(mocker):
+    from unittest.mock import AsyncMock, MagicMock
+
     bot = MagicMock(spec=discord.Client)
-    # get_guild used in Events.on_ready? (not strictly needed)
     bot.get_guild = MagicMock()
+    bot.wait_until_ready = AsyncMock()
     return bot
 
 

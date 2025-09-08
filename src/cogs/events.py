@@ -31,43 +31,47 @@ class Events(commands.Cog, name="Events"):
 
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member):
-        if member.bot:
+        if member.bot or member.guild.id != config.GUILD_ID:
             return
 
-        if member.guild.id != config.GUILD_ID:
-            return
+        log.debug("Join: guild=%s user=%s", member.guild.id, member.id)
+        guild_id = member.guild.id
 
-        # throttled heatbeat for joins
-        join_log.debug("Join: guild=%s user=%s", member.guild.id, member.id)
+        role_channel_id = config.ROLE_CHANNEL.get(guild_id)
+        role_channel = (
+            member.guild.get_channel(role_channel_id) if role_channel_id else None
+        )
+        role_mention = (
+            role_channel.mention
+            if role_channel
+            else (f"<#{role_channel_id}>" if role_channel_id else None)
+        )
 
         channel_id = self.welcome_channels.get(
-            member.guild.id, config.DEFAULT_WELCOME_CHANNEL_ID
+            guild_id, config.DEFAULT_WELCOME_CHANNEL_ID
         )
-        if not channel_id:
-            log.warning("No welcome channel configured for guild %s.", member.guild.id)
-            return
-
         channel = member.guild.get_channel(channel_id)
         if not channel:
-            log.error(
-                "Could not find welcome channel with ID %s in guild %s.",
-                channel_id,
-                member.guild.id,
-            )
+            log.error("Welcome channel %s missing in guild %s.", channel_id, guild_id)
             return
 
-        try:
-            log.info("Generating welcome image for %s...", member.display_name)
+        if role_mention:
+            content = (
+                f"Welcome {member.mention}, please check the {role_mention} channel"
+            )
+        else:
+            content = member.mention
 
+        buf = None
+        try:
             lines = [
                 [
                     ("Congratulations ", config.REGULAR_FONT_PATH),
                     (f"{member.display_name} ", config.BOLD_ITALIC_FONT_PATH),
                     ("on becoming a ", config.REGULAR_FONT_PATH),
                     ("Player.", config.BOLD_ITALIC_FONT_PATH),
-                ],
+                ]
             ]
-
             buf = image_utils.make_multiline_glow(
                 config.TEMPLATE_PATH,
                 lines,
@@ -75,27 +79,28 @@ class Events(commands.Cog, name="Events"):
                 glow_radii=(20, 40, 80),
                 v_pad=8,
             )
-
-            # Ensure buffer is at the beginning
             buf.seek(0)
-
-            await channel.send(
-                content=member.mention,
-                file=discord.File(fp=buf, filename="welcome.png"),
-            )
-            log.info("Sent welcome image for %s", member.display_name)
-
         except Exception:
             log.exception(
                 "Failed to generate welcome image for %s", member.display_name
             )
-            try:
-                await channel.send(f"Welcome to the server, {member.mention}")
-            except discord.errors.Forbidden:
-                log.error(
-                    "Failed to send fallback welcome message in %s due to missing permissions.",
-                    channel.name,
+
+        try:
+            if buf:
+                await channel.send(
+                    content=content, file=discord.File(fp=buf, filename="welcome.png")
                 )
+            else:
+                await channel.send(content=content)
+            log.info("Sent welcome for %s", member.display_name)
+        except discord.Forbidden:
+            log.error(
+                "Missing permission to send in channel %s (%s)",
+                getattr(channel, "name", "?"),
+                channel.id,
+            )
+        except discord.HTTPException as e:
+            log.error("Failed to send welcome for %s: %s", member.id, e)
 
     @commands.Cog.listener()
     async def on_member_update(self, before: discord.Member, after: discord.Member):
