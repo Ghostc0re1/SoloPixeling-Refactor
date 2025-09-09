@@ -68,3 +68,4 @@ desktop.ini
 .env
 .env.*.local
 *.env
+*welcome_messages.json

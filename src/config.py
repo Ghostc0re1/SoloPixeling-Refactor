@@ -3,11 +3,13 @@
 import os
 from pathlib import Path
 from dotenv import load_dotenv
+from loader import load_welcome_messages
 from utility.schedule_utils import PingSchedule
 
 load_dotenv()
 
 # === Core Bot Configuration ===
+WELCOME_MESSAGES = load_welcome_messages()
 
 
 # --- Environment ---
@@ -57,6 +59,7 @@ if not TOKEN:
 
 HERE = Path(__file__).parent
 ROOT_DIR = HERE.parent
+
 
 # === Logging ===
 DEFAULT_FMT = "%(asctime)s %(levelname)s [%(name)s] %(message)s"

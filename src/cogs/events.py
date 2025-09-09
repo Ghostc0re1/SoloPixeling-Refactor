@@ -55,10 +55,12 @@ class Events(commands.Cog, name="Events"):
             log.error("Welcome channel %s missing in guild %s.", channel_id, guild_id)
             return
 
+        template = config.WELCOME_MESSAGES.get(
+            str(guild_id), config.WELCOME_MESSAGES.get("default", "{mention}")
+        )
+
         if role_mention:
-            content = (
-                f"Welcome {member.mention}, please check the {role_mention} channel"
-            )
+            content = template.format(mention=member.mention, role=role_mention or "")
         else:
             content = member.mention
 
