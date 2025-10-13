@@ -16,7 +16,7 @@ build/
 *.pyc
 *.pyo
 *.pyd
-
+src/config.py
 # Virtual environment
 .venv/
 venv/
