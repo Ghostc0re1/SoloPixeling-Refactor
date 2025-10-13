@@ -430,7 +430,7 @@ class Giveaway(commands.Cog, name="Giveaway"):
     async def check_giveaways_loop(self):
         try:
             now = datetime.now(timezone.utc)
-            due = await db.get_due_giveaways(now.isoformat())
+            due = await db.get_due_giveaways(now)
             heartbeat.debug("due=%d at %s", len(due), now.isoformat())
             for g in due:
                 await self.process_ended_giveaway(g)
