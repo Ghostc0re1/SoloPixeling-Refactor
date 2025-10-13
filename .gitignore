@@ -11,6 +11,7 @@ __pycache__/
 dist/
 build/
 .eggs/
+*config.py
 
 # Byte-compiled / optimized / DLL files
 *.pyc
@@ -68,3 +69,4 @@ desktop.ini
 .env
 .env.*.local
 *.env
+*welcome_messages.json
