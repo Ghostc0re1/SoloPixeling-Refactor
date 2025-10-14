@@ -275,7 +275,28 @@ class Giveaway(commands.Cog, name="Giveaway"):
             # 7) skip users who left
             guild = self.bot.get_guild(g["guild_id"])
             if not guild:
-                logger.warning("Guild not found", extra=ctx)
+                try:
+                    # If not in cache, fetch it from the API
+                    guild = await self.bot.fetch_guild(g["guild_id"])
+                except discord.Forbidden:
+                    logger.error(
+                        "Failed to fetch guild %s due to permissions.",
+                        g["guild_id"],
+                        extra=ctx,
+                    )
+                    return
+                except discord.HTTPException:
+                    logger.warning(
+                        "Failed to fetch guild %s due to an HTTP error.",
+                        g["guild_id"],
+                        extra=ctx,
+                    )
+                    return
+
+            if not guild:
+                logger.warning(
+                    "Guild %s not found in cache or via API.", g["guild_id"], extra=ctx
+                )
                 return
 
             entrants = await self._get_valid_entrants(g["guild_id"], entrant_ids)
@@ -320,8 +341,26 @@ class Giveaway(commands.Cog, name="Giveaway"):
                 except Exception:
                     logger.exception("Failed to reply with winners", extra=ctx)
 
-        except Exception:
-            logger.exception("process_ended_giveaway failed", extra=ctx)
+        except discord.Forbidden:
+            logger.critical(
+                "PERMISSION ERROR: The bot lacks permissions to finalize giveaway in channel %s.",
+                g.get("channel_id"),
+                extra=ctx,
+                exc_info=True,
+            )
+        except discord.NotFound:
+            logger.warning(
+                "NOT FOUND ERROR: The giveaway message %s or channel %s was likely deleted.",
+                g.get("message_id"),
+                g.get("channel_id"),
+                extra=ctx,
+            )
+        except Exception as e:
+            logger.exception(
+                "An unexpected error of type '%s' occurred in process_ended_giveaway.",
+                type(e).__name__,
+                extra=ctx,
+            )
 
     # --- GIVEAWAY START COMMAND ---
     @app_commands.command(
