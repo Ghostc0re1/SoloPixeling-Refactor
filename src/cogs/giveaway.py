@@ -19,7 +19,7 @@ from data import database as db
 
 logger = get_logger("giveaway")
 heartbeat = get_logger("giveaway.heartbeat")
-add_throttle(heartbeat, 900)
+add_throttle(heartbeat, 4500)
 
 
 class Giveaway(commands.Cog, name="Giveaway"):
@@ -629,40 +629,36 @@ class Giveaway(commands.Cog, name="Giveaway"):
             )
         mentions = ", ".join(w.mention for w in rerolled_winners)
 
-        channel = self.bot.get_channel(
-            rec["channel_id"]
-        ) or await self.bot.fetch_channel(rec["channel_id"])
+        final_embed = self._build_ended_embed(
+            g_data=rec,
+            winners=rerolled_winners,
+            status=f"Rerolled by {interaction.user.mention}",
+        )
+
         try:
+            channel = await self._get_message_channel(rec["channel_id"])
+            if not channel:
+                raise discord.NotFound("Channel not found")
             msg = await channel.fetch_message(mid)
-        except Exception:
+        except (discord.NotFound, discord.Forbidden):
             return await interaction.followup.send(
                 f"Rerolled: {mentions}\n(Original message not found to edit.)",
                 ephemeral=True,
             )
 
-        embed = (
-            msg.embeds[0] if msg.embeds else discord.Embed(color=discord.Color.gold())
-        )
-        idx = next(
-            (i for i, f in enumerate(embed.fields) if f.name == "Rerolled Winners"),
-            None,
-        )
-        if idx is not None:
-            embed.set_field_at(
-                idx, name="Rerolled Winners", value=mentions, inline=False
-            )
-        else:
-            embed.add_field(name="Rerolled Winners", value=mentions, inline=False)
         try:
-            await msg.edit(embed=embed)
+            await msg.edit(
+                content="This giveaway has ended.", embed=final_embed, view=None
+            )
         except Exception:
             logger.exception("Failed to edit message for reroll %s", mid)
-        try:
-            await msg.reply(f"🎲 Reroll: {mentions}")
-        except Exception:
-            logger.exception("Failed to reply reroll winners %s", mid)
 
-        await interaction.followup.send("✅ Rerolled.", ephemeral=True)
+        try:
+            await msg.reply(f"🎲 A new winner has been drawn: {mentions}")
+        except Exception:
+            logger.exception("Failed to reply with reroll winners for %s", mid)
+
+        await interaction.followup.send("✅ Rerolled successfully.", ephemeral=True)
 
 
 async def setup(bot: commands.Bot):
