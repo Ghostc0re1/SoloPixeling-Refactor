@@ -631,134 +631,150 @@ class Leveling(commands.Cog, name="Leveling"):
         return (datetime.now(ET) - timedelta(days=1)).date().isoformat()
 
     @app_commands.command(
-        name="testdaily", description="Test the daily award for a specific date."
+        name="sync_roles",
+        description="Syncs level roles for a specific user or all members in the server.",
     )
     @app_commands.describe(
-        date="The date to test in YYYY-MM-DD format. Defaults to yesterday (ET)."
+        user="The user to sync roles for. If omitted, syncs for everyone."
     )
     @commands.is_owner()
-    async def test_daily_award(
-        self, interaction: discord.Interaction, date: Optional[str] = None
+    async def sync_roles(
+        self, interaction: discord.Interaction, user: Optional[discord.Member] = None
     ):
-        """Dry-run: briefly give/remove the DAILY_XP_ROLE to yesterday's winner."""
+        """[Admin] Syncs level roles based on current XP."""
         await interaction.response.defer(ephemeral=True, thinking=True)
 
-        try:
-            target_date = self._parse_date_or_yesterday_et(date)
-            guild = interaction.guild
-            if guild is None:
-                return await interaction.edit_original_response(
-                    content="❌ This command must be run in a server."
-                )
-
-            # Find winner
-            top = await database.get_daily_top_user(guild.id, target_date)
-            if not top:
-                return await interaction.edit_original_response(
-                    content=f"❌ No winner found for **{guild.name}** on `{target_date}`."
-                )
-
-            user_id, xp_gain = top
-
-            # Resolve role
-            role = guild.get_role(config.DAILY_XP_ROLE)
-            if not role:
-                return await interaction.edit_original_response(
-                    content=f"❌ `DAILY_XP_ROLE` not found (ID `{config.DAILY_XP_ROLE}`)."
-                )
-
-            # Resolve member (may have left)
-            member = guild.get_member(user_id)
-            if member is None:
-                try:
-                    member = await guild.fetch_member(user_id)
-                except discord.NotFound:
-                    # Still report winner by ID/mention fallback
-                    return await interaction.edit_original_response(
-                        content=(
-                            "❌ **Test Failed:** The winning user is no longer in this server.\n"
-                            f"**Winner (ID):** `{user_id}`\n"
-                            f"**XP Gained:** `{xp_gain}`\n"
-                            f"**Date:** `{target_date}`"
-                        )
-                    )
-
-            # Award briefly
-            await member.add_roles(role, reason=f"Admin test for {target_date}")
-            await interaction.followup.send(
-                f"✅ **Awarding Test**\n"
-                f"Gave `{role.name}` to **{member.display_name}** "
-                f"for **{xp_gain} XP** on `{target_date}`.\n"
-                f"*Removing role in 5 seconds…*",
-                ephemeral=True,
-            )
-            await asyncio.sleep(5)
-            await member.remove_roles(role, reason="Admin test complete.")
-
-            # Final summary
+        guild = interaction.guild
+        if not guild:
             await interaction.edit_original_response(
-                content=(
-                    "✅ **Test Complete!**\n"
-                    f"Temporarily awarded and removed `{role.name}` from **{member.display_name}**.\n\n"
-                    f"**Winner:** <@{user_id}> (`{user_id}`)\n"
-                    f"**XP Gained:** `{xp_gain}`\n"
-                    f"**Date:** `{target_date}`"
-                )
+                content="❌ This command must be run in a server."
             )
+            return
 
-        except ValueError as ve:
-            await interaction.edit_original_response(content=f"❌ {ve}")
-        except discord.Forbidden:
-            await interaction.edit_original_response(
-                content=(
-                    "❌ **PERMISSION ERROR**\n"
-                    f"I can’t assign `{getattr(role, 'name', 'DAILY_XP_ROLE')}`. "
-                    "Check my role hierarchy and permissions."
-                )
-            )
-        except Exception as e:
-            log.exception("Error during /testdaily command")
-            await interaction.edit_original_response(
-                content=f"Unexpected error: ```{e}```"
-            )
+        if user:
+            targets = [user]
+            title = f"Syncing Roles for {user.display_name}"
+        else:
+            targets = guild.members
+            title = "Syncing Roles for All Server Members"
 
-    @app_commands.command(
-        name="testdailydelete",
-        description="Test deletion of daily XP data for a specific date (with confirmation).",
-    )
-    @commands.is_owner()
-    async def test_daily_delete(
-        self, interaction: discord.Interaction, date: Optional[str] = None
-    ):
-        """Shows a confirm dialog; the view should call the announced-gated reset RPC."""
-        try:
-            target_date = self._parse_date_or_yesterday_et(date)
-            guild = interaction.guild
-            if guild is None:
-                return await interaction.response.send_message(
-                    "❌ This command must be run in a server.", ephemeral=True
-                )
+        reward_roles = {}
+        invalid_role_ids = []
+        for level, role_id in config.ROLE_REWARDS.items():
+            role = guild.get_role(role_id)
+            if role:
+                reward_roles[level] = role
+            else:
+                invalid_role_ids.append(role_id)
 
-            view = ConfirmView(
-                guild_id=guild.id, date_str=target_date, author_id=interaction.user.id
-            )
-            # message = await interaction.response.send_message(
-            #     f"🚨 **Confirm deletion of daily XP on `{guild}` for `{target_date}`?**\n"
-            #     "This will only succeed if the daily winner was **successfully announced**.",
-            #     view=view,
-            #     ephemeral=True,
-            # )
+        managed_role_ids = {role.id for role in reward_roles.values()}
+
+        updated_count = 0
+        skipped_count = 0
+        failed_count = 0
+
+        for member in targets:
+            if member.bot:
+                continue
+
             try:
-                view.message = await interaction.original_response()
-            except Exception:
-                pass
-        except ValueError as ve:
-            await interaction.response.send_message(f"❌ {ve}", ephemeral=True)
-        except Exception:
-            log.exception("Error during /testdailydelete command")
-            await interaction.response.send_message(
-                "Unexpected error opening confirmation.", ephemeral=True
+                user_info = await database.get_user(guild.id, member.id)
+
+                if not user_info:
+                    skipped_count += 1
+                    continue
+
+                xp, current_level = user_info
+
+                current_role_ids = {role.id for role in member.roles}
+                roles_to_add = set()
+                roles_to_remove = set()
+
+                for level_req, role_obj in reward_roles.items():
+                    if current_level >= level_req:
+                        if role_obj.id not in current_role_ids:
+                            roles_to_add.add(role_obj)
+                    else:
+                        if role_obj.id in current_role_ids:
+                            roles_to_remove.add(role_obj)
+
+                if roles_to_add:
+                    await member.add_roles(*roles_to_add, reason="XP Role Sync")
+
+                if roles_to_remove:
+                    await member.remove_roles(*roles_to_remove, reason="XP Role Sync")
+
+                if roles_to_add or roles_to_remove:
+                    updated_count += 1
+                else:
+                    skipped_count += 1
+
+            except discord.Forbidden:
+                log.warning(
+                    f"Failed to sync roles for {member.display_name} ({member.id}) due to permissions."
+                )
+                failed_count += 1
+            except Exception as e:
+                log.exception(
+                    f"An unexpected error occurred while syncing roles for {member.display_name}"
+                )
+                failed_count += 1
+
+        embed = discord.Embed(
+            title=title,
+            color=discord.Color.green(),
+            description="The role synchronization process has completed.",
+        )
+        embed.add_field(name="✅ Members Updated", value=str(updated_count))
+        embed.add_field(name="▶️ Members Skipped", value=str(skipped_count), inline=True)
+        embed.add_field(name="❌ Syncs Failed", value=str(failed_count), inline=True)
+
+        if invalid_role_ids:
+            embed.add_field(
+                name="⚠️ Warning: Invalid Roles",
+                value=f"The following role IDs from your config could not be found in this server: `{'`, `'.join(map(str, invalid_role_ids))}`",
+                inline=False,
             )
+
+        await interaction.edit_original_response(embed=embed)
+
+    # @app_commands.command(
+    #     name="testdailydelete",
+    #     description="Test deletion of daily XP data for a specific date (with confirmation).",
+    # )
+    # @commands.is_owner()
+    # async def test_daily_delete(
+    #     self, interaction: discord.Interaction, date: Optional[str] = None
+    # ):
+    #     """Shows a confirm dialog; the view should call the announced-gated reset RPC."""
+    #     try:
+    #         target_date = self._parse_date_or_yesterday_et(date)
+    #         guild = interaction.guild
+    #         if guild is None:
+    #             return await interaction.response.send_message(
+    #                 "❌ This command must be run in a server.", ephemeral=True
+    #             )
+
+    #         view = ConfirmView(
+    #             guild_id=guild.id, date_str=target_date, author_id=interaction.user.id
+    #         )
+    #         # message = await interaction.response.send_message(
+    #         #     f"🚨 **Confirm deletion of daily XP on `{guild}` for `{target_date}`?**\n"
+    #         #     "This will only succeed if the daily winner was **successfully announced**.",
+    #         #     view=view,
+    #         #     ephemeral=True,
+    #         # )
+    #         try:
+    #             view.message = await interaction.original_response()
+    #         except Exception:
+    #             pass
+    #     except ValueError as ve:
+    #         await interaction.response.send_message(f"❌ {ve}", ephemeral=True)
+    #     except Exception:
+    #         log.exception("Error during /testdailydelete command")
+    #         await interaction.response.send_message(
+    #             "Unexpected error opening confirmation.", ephemeral=True
+    #         )
 
 
 async def setup(bot: commands.Bot):
