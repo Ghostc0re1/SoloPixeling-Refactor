@@ -678,7 +678,7 @@ class Leveling(commands.Cog, name="Leveling"):
                 continue
 
             try:
-                user_info = await database.get_user(guild.id, member.id)
+                user_info = await database.get_user(member.id, guild.id)
 
                 if not user_info:
                     skipped_count += 1
