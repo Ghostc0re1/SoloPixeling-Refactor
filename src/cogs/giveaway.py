@@ -469,10 +469,41 @@ class Giveaway(commands.Cog, name="Giveaway"):
     async def check_giveaways_loop(self):
         try:
             now = datetime.now(timezone.utc)
-            due = await db.get_due_giveaways(now)
-            heartbeat.debug("due=%d at %s", len(due), now)
-            for g in due:
-                await self.process_ended_giveaway(g)
+            now_iso = now.isoformat()
+
+            heartbeat.debug("checking giveaways due as of %s", now_iso)
+
+            try:
+                due = await db.get_due_giveaways(now_iso)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "check_giveaways_loop: DB timeout when checking giveaways as of %s",
+                    now_iso,
+                    exc_info=True,
+                )
+                return
+            except Exception:
+                logger.exception(
+                    "check_giveaways_loop: DB error when checking giveaways as of %s (kept alive)",
+                    now_iso,
+                )
+                return
+            heartbeat.debug("due=%d at %s", len(due or []), now_iso)
+            for g in due or []:
+                gid = g.get("id") or g.get("giveaway_id") or g.get("mid")
+                try:
+                    await self.process_ended_giveaway(g)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception(
+                        "check_giveaways_loop: error processing giveaway %r (kept alive)",
+                        gid,
+                    )
+
+        except asyncio.CancelledError:
+            logger.info("check_giveaways_loop cancelled (shutting down?)")
+            raise
         except Exception:
             logger.exception("check_giveaways_loop error (kept alive)")
 

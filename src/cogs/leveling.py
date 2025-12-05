@@ -714,7 +714,7 @@ class Leveling(commands.Cog, name="Leveling"):
                     f"Failed to sync roles for {member.display_name} ({member.id}) due to permissions."
                 )
                 failed_count += 1
-            except Exception as e:
+            except Exception:
                 log.exception(
                     f"An unexpected error occurred while syncing roles for {member.display_name}"
                 )

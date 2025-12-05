@@ -79,7 +79,11 @@ def _ensure_session() -> None:
 
 async def _db(call):
     async with _DB_SEM:
-        return await asyncio.wait_for(asyncio.to_thread(call), timeout=20.0)
+        try:
+            return await asyncio.wait_for(asyncio.to_thread(call), timeout=35.0)
+        except asyncio.TimeoutError:
+            logger.error("DB call timed out after 35s in _db()", exc_info=True)
+            raise
 
 
 async def _db_authed_async(call: Callable[[], T]) -> T:
@@ -91,21 +95,76 @@ async def _db_authed_async(call: Callable[[], T]) -> T:
 
 
 def _retry_sync(
-    call, *, retries: int = 4, base: float = 0.35, factor: float = 2.0, cap: float = 5.0
+    call,
+    *,
+    retries: int = 4,
+    base_delay: float = 0.35,
+    factor: float = 2.0,
+    cap: float = 5.0,
 ):
     """
-    Minimal sync retry with backoff+jitter for transient httpx/httpcore blips.
-    Runs inside the worker thread created by _db/_db_authed_async.
+    Retry helper for sync DB operations.
+
+    Retries ONLY if the exception is transient and does NOT contain signs
+    of a PostgREST server-side failure such as:
+        - "Internal server error"
+        - "JSON could not be generated"
+
+    Logs structured diagnostic information and records retry attempts.
     """
-    delay = base
+    delay = base_delay
+    attempts = 0
+
     for attempt in range(retries):
         try:
+            if attempt > 0:
+                logger.warning(
+                    "retry_sync: Attempt %d/%d executing call()",
+                    attempt,
+                    retries - 1,
+                )
             return call()
-        except _TRANSIENT as e:
+
+        except _TRANSIENT as exc:
+            attempts = attempt
+
+            message = str(exc).lower()
+
+            server_error = (
+                "internal server error" in message
+                or "json could not be generated" in message
+                or "556" in message
+            )
+
+            if server_error:
+                logger.error(
+                    "retry_sync: Server-side failure detected. "
+                    "Not retrying. Attempts=%d, Error=%s",
+                    attempt,
+                    exc,
+                )
+                raise
+
             if attempt == retries - 1:
-                raise e
-            time.sleep(min(delay, cap) + random.uniform(0.0, 0.25))
+                logger.error(
+                    "retry_sync: Out of retries for transient error. Attempts=%d Error=%s",
+                    attempt,
+                    exc,
+                )
+                raise
+
+            sleep_time = min(delay, cap) + random.uniform(0.0, 0.25)
+            logger.warning(
+                "retry_sync: Transient error. Retrying in %.2fs. "
+                "Attempts=%d/%d. Error=%s",
+                sleep_time,
+                attempt,
+                retries - 1,
+                exc,
+            )
+            time.sleep(sleep_time)
             delay *= factor
+
     return None
 
 
